@@ -60,6 +60,8 @@ jobs:
 
   cli:
     name: Command-line app (${{ matrix.target }})
+    # Wait for the desktop jobs so everything lands in the same draft release.
+    needs: desktop
     strategy:
       fail-fast: false
       matrix:
