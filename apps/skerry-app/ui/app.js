@@ -376,14 +376,14 @@ main();
 function demoApi() {
   const listeners = [];
   const demo = {
-    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "0.1.0" },
+    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.0.0" },
     settings: { enabled: true, clipboard_sync: true, swap_cmd_ctrl: true, edge_switching: true, block_switch_while_dragging: true },
     layout: { left: "a1", right: "b2", top: null, bottom: null },
     peers: [
-      { id: "a1", name: "MacBook Air", os: "macos", paired: true, online: true, available: true, discovered: true, addr: "192.168.1.31:24870", fingerprint: "9f3a-77c1-02be-d5e0-11aa", edge: "left", speed: 1.4, version: "0.1.0" },
-      { id: "b2", name: "Gaming PC", os: "windows", paired: true, online: true, available: true, discovered: true, addr: "192.168.1.40:24870", fingerprint: "3b10-6d2e-8a44-c901-7f2b", edge: "right", speed: 1, version: "0.1.0" },
+      { id: "a1", name: "MacBook Air", os: "macos", paired: true, online: true, available: true, discovered: true, addr: "192.168.1.31:24870", fingerprint: "9f3a-77c1-02be-d5e0-11aa", edge: "left", speed: 1.4, version: "1.0.0" },
+      { id: "b2", name: "Gaming PC", os: "windows", paired: true, online: true, available: true, discovered: true, addr: "192.168.1.40:24870", fingerprint: "3b10-6d2e-8a44-c901-7f2b", edge: "right", speed: 1, version: "1.0.0" },
       { id: "c3", name: "Office Laptop", os: "windows", paired: true, online: false, available: false, discovered: false, addr: "192.168.1.52:24870", fingerprint: "77de-a012-55c3-09ab-e4f1", edge: null, speed: 1, version: null },
-      { id: "d4", name: "living-room-nuc", os: "linux", paired: false, online: false, available: false, discovered: true, addr: "192.168.1.60:24870", fingerprint: null, edge: null, speed: 1, version: "0.1.0" },
+      { id: "d4", name: "living-room-nuc", os: "linux", paired: false, online: false, available: false, discovered: true, addr: "192.168.1.60:24870", fingerprint: null, edge: null, speed: 1, version: "1.0.0" },
     ],
     focus: new URLSearchParams(location.search).has("controlling") ? { kind: "controlling", peer: "b2" } : { kind: "local" },
     capture: { state: "ok" },

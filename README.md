@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/AviSplash/skerry/actions/workflows/ci.yml"><img src="https://github.com/AviSplash/skerry/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/AviSplash/Skerry/actions/workflows/ci.yml"><img src="https://github.com/AviSplash/Skerry/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-teal" alt="License: GPL-3.0"></a>
 </p>
 
@@ -45,13 +45,13 @@ A *skerry* is a small rocky island. Your cursor hops across them.
 
 ## Install
 
-Download the installer for each computer from the [Releases page](https://github.com/AviSplash/skerry/releases):
+Download the installer for each computer from its release:
 
-| OS | File |
-|---|---|
-| Windows | `Skerry_x.y.z_x64-setup.exe` or `.msi` |
-| macOS | `Skerry_x.y.z_universal.dmg` |
-| Linux | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
+| OS | Release | File |
+|---|---|---|
+| Windows | [v1.0 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.0-windows) | `Skerry_1.0.0_x64-setup.exe` or `.msi` |
+| macOS | [v1.0 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.0-macos) | `Skerry_1.0.0_universal.dmg` (Apple Silicon and Intel) |
+| Linux | [v1.0 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.0-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
 
 Install Skerry on **every** computer you want to share between.
 
@@ -87,7 +87,7 @@ On a Mac, Alt is the Option key. You can change hotkeys in the settings file (sh
 
 ```text
 $ skerry-cli run
-Skerry 0.1.0 on studio (X11)
+Skerry 1.0.0 on studio (X11)
 device id 1c843bbbadba346f  fingerprint 1c84-3bbb-adba-346f-1f47  port 24870
 Type `help` for commands.
 > devices
