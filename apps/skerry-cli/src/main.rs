@@ -98,6 +98,7 @@ async fn run(paths: Paths, listen: Option<SocketAddr>, discovery: bool, verbose:
     let mut events = engine.subscribe();
     let mut last = summary(&snap);
     let mut announced = std::collections::HashSet::new();
+    let mut scanning = snap.scanning;
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
     loop {
         tokio::select! {
@@ -107,6 +108,15 @@ async fn run(paths: Paths, listen: Option<SocketAddr>, discovery: bool, verbose:
                     if now != last {
                         println!("{now}");
                         last = now;
+                    }
+                    if s.scanning != scanning {
+                        scanning = s.scanning;
+                        if scanning {
+                            println!(">> Scanning the network…");
+                        } else {
+                            let nearby = s.peers.iter().filter(|p| !p.paired).count();
+                            println!(">> Scan finished: {nearby} unpaired computer(s) nearby. Type `devices` to list them.");
+                        }
                     }
                     for p in &s.pairings {
                         // Computers showing a code get a Notice; prompt the one typing it.
@@ -158,6 +168,7 @@ async fn command(engine: &EngineHandle, line: &str) -> bool {
         [] => {}
         ["help"] | ["?"] => println!(
             "devices                         list paired and nearby computers\n\
+             scan                            look for computers on this network again\n\
              pair <device-id | host[:port]>  pair with a computer\n\
              code <session> <digits>         enter the code shown on the other computer\n\
              cancel <session>                cancel a pairing\n\
@@ -181,8 +192,12 @@ async fn command(engine: &EngineHandle, line: &str) -> bool {
                     if p.online { "online" } else { "offline" },
                     p.edge.map(|e| format!("on the {}", e.name())).unwrap_or_default()
                 );
+                if let (false, Some(e)) = (p.online, &p.last_error) {
+                    println!("{:16}  last error: {e}", "");
+                }
             }
         }
+        ["scan"] => engine.rescan(),
         ["pair", target] => {
             let s = engine.snapshot();
             let t = if s.peers.iter().any(|p| p.id == *target) {

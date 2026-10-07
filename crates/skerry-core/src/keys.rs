@@ -428,6 +428,14 @@ impl HotkeyMatcher {
     }
 
     pub fn on_key(&mut self, code: u32, pressed: bool) -> KeyVerdict {
+        self.on_key_with_mods(code, pressed, None)
+    }
+
+    /// Like [`on_key`](Self::on_key), but with the modifier state as the OS
+    /// reports it. Tracked state can go stale when the OS swallows a key-up
+    /// (for example Win+L or Ctrl+Alt+Del), which would stop hotkeys from
+    /// matching; the OS state is always right.
+    pub fn on_key_with_mods(&mut self, code: u32, pressed: bool, os_mods: Option<Mods>) -> KeyVerdict {
         if is_modifier(code) {
             if pressed {
                 self.held_mods.insert(code);
@@ -443,7 +451,7 @@ impl HotkeyMatcher {
             // Auto-repeat of a hotkey key.
             return KeyVerdict::Swallow;
         }
-        let mods = self.mods();
+        let mods = os_mods.unwrap_or_else(|| self.mods());
         if let Some((_, action)) = self.bindings.iter().find(|(hk, _)| hk.key == code && hk.mods == mods) {
             self.swallowed.insert(code);
             return KeyVerdict::Fire(*action);
@@ -497,6 +505,26 @@ mod tests {
         assert_eq!(m.on_key(code::RIGHT, true), KeyVerdict::Swallow, "auto-repeat");
         assert_eq!(m.on_key(code::RIGHT, false), KeyVerdict::Swallow);
         assert_eq!(m.on_key(code::A, true), KeyVerdict::Pass);
+    }
+
+    #[test]
+    fn os_reported_mods_override_stale_state() {
+        let mut m = HotkeyMatcher::new(vec![(
+            Hotkey::parse("ctrl+alt+shift+right").unwrap(),
+            HotkeyAction::Switch(Edge::Right),
+        )]);
+        // A Win key-up was lost (e.g. Win+L): tracked state wrongly includes META.
+        m.on_key(code::LEFTMETA, true);
+        for k in [code::LEFTCTRL, code::LEFTALT, code::LEFTSHIFT] {
+            m.on_key(k, true);
+        }
+        assert_eq!(m.on_key(code::RIGHT, true), KeyVerdict::Pass, "stale tracked state blocks the hotkey");
+        m.on_key(code::RIGHT, false);
+        let actual = Mods::CTRL.union(Mods::ALT).union(Mods::SHIFT);
+        assert_eq!(
+            m.on_key_with_mods(code::RIGHT, true, Some(actual)),
+            KeyVerdict::Fire(HotkeyAction::Switch(Edge::Right))
+        );
     }
 
     #[test]

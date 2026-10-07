@@ -137,6 +137,8 @@ pub struct Config {
     pub edge_switching: bool,
     /// Do not switch while a mouse button is held (protects window drags).
     pub block_switch_while_dragging: bool,
+    /// Let the desktop app look for new versions once in a while.
+    pub check_updates: bool,
     pub hotkeys: Vec<HotkeyBinding>,
     pub layout: Layout,
     pub peers: Vec<PeerConfig>,
@@ -154,6 +156,7 @@ impl Default for Config {
             swap_cmd_ctrl: true,
             edge_switching: true,
             block_switch_while_dragging: true,
+            check_updates: true,
             hotkeys: default_hotkeys().into_iter().map(|(keys, action)| HotkeyBinding { keys, action }).collect(),
             layout: Layout::default(),
             peers: Vec::new(),

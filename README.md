@@ -29,7 +29,8 @@ A *skerry* is a small rocky island. Your cursor hops across them.
 - **Command ↔ Control translation.** Cmd+C on a Mac keyboard copies on Windows and Linux, and Ctrl+C on a PC keyboard copies on a Mac. Turn it off if you prefer.
 - **Clipboard sync.** Text and images follow the cursor to the next computer.
 - **Encrypted end to end.** Every connection uses the Noise protocol (`Noise_XX_25519_ChaChaPoly_BLAKE2s`). Pairing uses a 6-digit code with SPAKE2, so the code can't be brute-forced offline.
-- **Finds your computers automatically** on the local network (mDNS). You can also add them by address.
+- **Finds your computers automatically** on the local network (mDNS), with a **Scan network** button that sweeps your subnet when automatic discovery is blocked. You can also add computers by address.
+- **Updates itself.** Skerry checks for new versions and installs them in place; your pairings and settings stay.
 - **No account, no cloud, no subscription.** Everything stays on your network.
 - **Tray app with an arrangement editor**, plus a command-line version for servers and tiling setups.
 
@@ -49,23 +50,29 @@ Download the installer for each computer from its release:
 
 | OS | Release | File |
 |---|---|---|
-| Windows | [v1.0 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.0-windows) | `Skerry_1.0.0_x64-setup.exe` or `.msi` |
-| macOS | [v1.0 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.0-macos) | `Skerry_1.0.0_universal.dmg` (Apple Silicon and Intel) |
-| Linux | [v1.0 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.0-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
+| Windows | [v1.1 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1-windows) | `Skerry_1.1.0_x64-setup.exe` or `.msi` |
+| macOS | [v1.1 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1-macos) | `Skerry_1.1.0_universal.dmg` (Apple Silicon and Intel) |
+| Linux | [v1.1 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
 
-Install Skerry on **every** computer you want to share between.
+Install Skerry on **every** computer you want to share between. Use the same version everywhere.
+
+### Updates
+
+Skerry 1.1 and later update themselves. When a new version is out, the window shows **Skerry x.y is available → Update and restart**; you can also use **Check for updates** in the tray menu or under **Settings → Advanced → Help**. Updates are downloaded from this repository's releases and verified against a signing key built into Skerry before they're installed. Pairings and settings are kept. To stop automatic checks, turn off **Settings → Check for updates**.
+
+Coming from 1.0, install 1.1 once by hand over the old version (no need to uninstall first).
 
 ### First run, by OS
 
 The current builds are not code-signed (signing certificates cost money; see [Roadmap](#roadmap)), so each OS asks once before running them.
 
-- **Windows:** if SmartScreen says "Windows protected your PC", click **More info → Run anyway**. When Windows Firewall asks, allow Skerry on **private networks**. To control apps running as administrator, Skerry must also run as administrator. Windows never lets any app control UAC prompts or the lock screen.
-- **macOS:** open the `.dmg`, drag Skerry to Applications, then **right-click Skerry → Open** the first time. When asked, allow Skerry under **System Settings → Privacy & Security → Accessibility**, then restart Skerry.
+- **Windows:** if SmartScreen says "Windows protected your PC", click **More info → Run anyway**. At the end of the installation, approve the administrator prompt: it adds the Windows Firewall rule that lets your other computers connect to this one. To control apps running as administrator, Skerry must also run as administrator. Windows never lets any app control UAC prompts or the lock screen.
+- **macOS:** open the `.dmg`, drag Skerry to Applications, then **right-click Skerry → Open** the first time. When asked, allow Skerry under **System Settings → Privacy & Security → Accessibility** and **Input Monitoring**, then restart Skerry. When macOS asks whether Skerry may find devices on your local network, click **Allow**.
 - **Linux:** on GNOME or KDE (Wayland), approve the "Remote desktop" and "Input capture" requests the first time. Skerry remembers your answer. On X11 nothing extra is needed.
 
 ## Getting started
 
-1. Start Skerry on two computers on the same network. Each one shows the other under **Nearby**.
+1. Start Skerry on two computers on the same network. Each one shows the other under **Nearby**. If it doesn't appear within a few seconds, click **Scan network**.
 2. Click **Pair** on one of them. The other shows a 6-digit code: type it on the first one. You only do this once.
 3. Drag the paired computer to the side of the screen where it sits on your desk. The other computer updates its own layout to match.
 4. Move the mouse off that edge. You're now using the other computer.
@@ -87,10 +94,11 @@ On a Mac, Alt is the Option key. You can change hotkeys in the settings file (sh
 
 ```text
 $ skerry-cli run
-Skerry 1.0.0 on studio (X11)
+Skerry 1.1.0 on studio (X11)
 device id 1c843bbbadba346f  fingerprint 1c84-3bbb-adba-346f-1f47  port 24870
 Type `help` for commands.
 > devices
+> scan
 > pair 192.168.1.40
 > code 2 684858
 > layout right 93b98ac43575a291
@@ -108,9 +116,21 @@ The wire format is described in [docs/protocol.md](docs/protocol.md).
 
 ## Troubleshooting
 
-- **The other computer doesn't show up under Nearby.** Both computers must be on the same network. Some office and guest Wi-Fi networks block discovery: use **Pair by address** with the other computer's IP address. To keep reconnecting by address, add it under **Settings → Advanced → Extra addresses**.
+Start with **Settings → Advanced → Help → Diagnostics**. It shows what Skerry sees on this computer (permissions, network addresses, each computer's connection state and the last connection error) plus the recent log. **Copy** it into a bug report. Log files are kept for a week; **Open logs folder** shows them.
+
+- **Pairing or connecting works from one computer but not from the other** (for example Windows → Mac works, Mac → Windows doesn't). The computer that can't be reached is blocking incoming connections:
+  - **Windows:** Windows Firewall blocks Skerry if its prompt was dismissed. Skerry shows a **Windows Firewall is blocking Skerry** banner: click **Allow Skerry** and approve the prompt. Or allow it yourself under **Windows Security → Firewall & network protection → Allow an app through firewall**, for both private and public networks.
+  - **macOS:** turn on Skerry under **System Settings → Privacy & Security → Local Network**. Without it, macOS stops Skerry from connecting to other computers ("No route to host").
+  - Third-party firewalls and antivirus suites need the same: allow Skerry, or TCP port 24870 and mDNS (UDP 5353).
+- **The other computer doesn't show up under Nearby.** Both computers must be on the same network. Click **Scan network** to sweep your subnet (this finds computers even when the network blocks automatic discovery). Otherwise use **Pair by address** with the other computer's IP address; to keep reconnecting by address, add it under **Settings → Advanced → Extra addresses**.
+- **The mouse won't cross to the other computer.** Check that:
+  1. the other computer shows **Online** under **Computers** on both sides (if it says Offline, the line under its name says why);
+  2. it's placed on the side where it really is, in the **Arrangement** on either computer;
+  3. you're pushing against the *outer* edge: with several monitors, that's the edge of the outermost monitor on that side;
+  4. no mouse button is held (switching waits while you drag, unless you turn that off);
+  5. on a Mac, Skerry is allowed under **Accessibility** and **Input Monitoring**. After updating Skerry on a Mac, macOS can keep showing it as allowed while silently blocking it: remove it from both lists with **−**, add it again with **+**, then restart Skerry.
+- **Hotkeys do nothing.** Hotkeys only switch to computers that are online and placed in the arrangement. On a Mac they need Input Monitoring. On Windows, keys pressed while an app running as administrator has focus only reach Skerry if Skerry also runs as administrator.
 - **"Could not listen on 0.0.0.0:24870".** Another program is using the port. Change `port` in the settings file.
-- **Firewall:** allow TCP port 24870 and mDNS (UDP 5353) on your local network.
 - **Keys stick or the mouse gets stuck on another computer.** Press Ctrl + Alt + Shift + Esc to bring it home. Skerry also releases every held key and button whenever control leaves a computer or a connection drops.
 
 ## Build from source
@@ -148,10 +168,14 @@ apps/skerry-app          desktop app (Tauri 2; the UI is plain HTML/CSS/JS in ui
 
 ## Roadmap
 
-- **Phase 1 (this release):** mouse and keyboard sharing, hotkeys, Cmd/Ctrl translation, encrypted pairing, discovery, text and image clipboard, arrangement editor, tray app, CI builds for all three OSes.
+- **Phase 1 (done in 1.0 and 1.1):** mouse and keyboard sharing, hotkeys, Cmd/Ctrl translation, encrypted pairing, discovery, text and image clipboard, arrangement editor, tray app, CI builds for all three OSes.
 - **Phase 2:** copy and paste files between computers, then drag-and-drop; Game Mode (relative mouse input for games).
 - **Phase 3:** dim inactive displays; lock and sleep computers together.
 - Also planned: code-signed builds, controlling others from wlroots compositors, and per-display (rather than per-computer) arrangement.
+
+## Releasing
+
+Run **Actions → Release → Run workflow** with a version like `v1.2`. It builds every platform, publishes the three releases, and, when the repository has the secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, signs the updates and publishes `latest.json` on the `updater` branch, which installed copies check. The public half of that key is `plugins.updater.pubkey` in `apps/skerry-app/tauri.conf.json`. Keep the private key safe: a lost key means existing installs can't verify later updates.
 
 ## Contributing
 

@@ -273,17 +273,24 @@ impl Desktop {
     /// The outer edge a pixel position touches, if any. Used by capture
     /// backends that see absolute cursor positions.
     pub fn edge_at(&self, x: f64, y: f64) -> Option<Edge> {
+        self.edge_near(x, y, 0.0)
+    }
+
+    /// Like [`Desktop::edge_at`], but also counts positions within `slack`
+    /// pixels of an edge (for systems that report fractional positions and
+    /// may stop the cursor just short of the last pixel).
+    pub fn edge_near(&self, x: f64, y: f64, slack: f64) -> Option<Edge> {
         if self.displays.is_empty() {
             return None;
         }
         let b = self.bounds();
-        if x <= b.x as f64 {
+        if x <= b.x as f64 + slack {
             Some(Edge::Left)
-        } else if x >= (b.right() - 1) as f64 {
+        } else if x >= (b.right() - 1) as f64 - slack {
             Some(Edge::Right)
-        } else if y <= b.y as f64 {
+        } else if y <= b.y as f64 + slack {
             Some(Edge::Top)
-        } else if y >= (b.bottom() - 1) as f64 {
+        } else if y >= (b.bottom() - 1) as f64 - slack {
             Some(Edge::Bottom)
         } else {
             None
@@ -369,6 +376,15 @@ mod tests {
             }
             s => panic!("unexpected {s:?}"),
         }
+    }
+
+    #[test]
+    fn edge_with_slack() {
+        let d = single();
+        assert_eq!(d.edge_at(1918.4, 500.0), None);
+        assert_eq!(d.edge_near(1918.4, 500.0, 1.0), Some(Edge::Right));
+        assert_eq!(d.edge_near(0.6, 500.0, 1.0), Some(Edge::Left));
+        assert_eq!(d.edge_near(900.0, 500.0, 1.0), None);
     }
 
     #[test]

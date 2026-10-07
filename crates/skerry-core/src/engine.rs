@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc as std_mpsc;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -30,6 +30,7 @@ use crate::geometry::{Desktop, Edge, EdgeSet, Rect, Step};
 use crate::identity::{device_id_for, fingerprint, Identity};
 use crate::input::{BackendStatus, Capture, CaptureEvent, Emulation, ScreenSource};
 use crate::keys::{translate, HotkeyAction, OsKind};
+use crate::net;
 use crate::pairing::{self, Role};
 use crate::proto::{Button, ClipKind, Hello, Message, ScreenInfo, PROTOCOL_VERSION};
 use crate::transport::{self, ConnEvent, ConnHandle, ConnId, Session};
@@ -44,6 +45,7 @@ const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(30);
 const MANUAL_RETRY: Duration = Duration::from_secs(15);
 const PAIR_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 const PAIR_FAILURE_LIMIT: usize = 5;
+const SCAN_CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -55,11 +57,13 @@ pub struct EngineOptions {
     pub discovery: bool,
     /// Address to accept connections on. Defaults to `0.0.0.0:<config port>`.
     pub listen: Option<SocketAddr>,
+    /// Extra addresses to probe when scanning the network (used by tests).
+    pub scan_extra: Vec<SocketAddr>,
 }
 
 impl EngineOptions {
     pub fn new(paths: Paths) -> Self {
-        EngineOptions { paths, discovery: true, listen: None }
+        EngineOptions { paths, discovery: true, listen: None, scan_extra: Vec::new() }
     }
 }
 
@@ -90,6 +94,7 @@ pub struct SettingsUpdate {
     pub swap_cmd_ctrl: Option<bool>,
     pub edge_switching: Option<bool>,
     pub block_switch_while_dragging: Option<bool>,
+    pub check_updates: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,6 +114,7 @@ pub struct SettingsView {
     pub swap_cmd_ctrl: bool,
     pub edge_switching: bool,
     pub block_switch_while_dragging: bool,
+    pub check_updates: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -125,6 +131,8 @@ pub struct PeerView {
     pub edge: Option<Edge>,
     pub speed: f64,
     pub version: Option<String>,
+    /// Why the last attempt to connect failed, in plain language.
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -159,6 +167,8 @@ pub struct Snapshot {
     pub hotkeys: Vec<HotkeyBinding>,
     pub manual_peers: Vec<String>,
     pub listen_error: Option<String>,
+    /// A network scan is running.
+    pub scanning: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,6 +190,7 @@ enum Command {
     SetSpeed(String, f64),
     AddManualPeer(String),
     RemoveManualPeer(String),
+    Rescan,
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -237,6 +248,12 @@ impl EngineHandle {
 
     pub fn remove_manual_peer(&self, addr: &str) {
         let _ = self.cmd.send(Command::RemoveManualPeer(addr.to_string()));
+    }
+
+    /// Look for computers again: re-query mDNS, retry offline peers now, and
+    /// sweep the local network for Skerry.
+    pub fn rescan(&self) {
+        let _ = self.cmd.send(Command::Rescan);
     }
 
     pub async fn shutdown(&self) {
@@ -297,6 +314,7 @@ pub async fn start(opts: EngineOptions, backends: Backends) -> Result<EngineHand
 
     let capture_status = backends.capture.status();
     let emulation_status = backends.emulation.status();
+    let emu_status = Arc::new(Mutex::new(emulation_status.clone()));
     backends.capture.set_hotkeys(cfg.parsed_hotkeys());
     backends.capture.set_block_while_dragging(cfg.block_switch_while_dragging);
     backends.capture.set_edges(EdgeSet::empty());
@@ -314,7 +332,8 @@ pub async fn start(opts: EngineOptions, backends: Backends) -> Result<EngineHand
         capture: backends.capture,
         capture_status,
         emulation_status,
-        emu: spawn_emulation(backends.emulation),
+        emu: spawn_emulation(backends.emulation, emu_status.clone()),
+        emu_status,
         screen: backends.screen,
         clip: ClipboardHandle::spawn(backends.clipboard),
         discovery,
@@ -341,6 +360,9 @@ pub async fn start(opts: EngineOptions, backends: Backends) -> Result<EngineHand
         internal_tx,
         conn_tx,
         listen_error,
+        last_errors: HashMap::new(),
+        scanning: false,
+        scan_extra: opts.scan_extra,
         dirty: true,
     };
     engine.publish();
@@ -360,6 +382,8 @@ enum Intent {
     Reconnect(String),
     Manual(String),
     Pair(u64),
+    /// Found while sweeping the network.
+    Probe,
 }
 
 enum Internal {
@@ -368,6 +392,7 @@ enum Internal {
     ClipRead { to: String, content: Option<(ClipContent, ClipHash)> },
     ClipDecoded { from: String, content: ClipContent, hash: ClipHash },
     ClipWritten { from: String },
+    ScanFinished { probed: usize },
 }
 
 struct Conn {
@@ -437,12 +462,13 @@ enum EmuCmd {
     Scroll(i32, i32),
     Key(u32, bool),
     ReleaseAll,
+    RefreshStatus,
 }
 
 /// Emulation runs on its own thread so slow OS calls never stall the engine.
 /// It remembers what is held down so everything can be released when the
 /// controller leaves or disconnects (no stuck keys).
-fn spawn_emulation(mut emu: Box<dyn Emulation>) -> std_mpsc::Sender<EmuCmd> {
+fn spawn_emulation(mut emu: Box<dyn Emulation>, status: Arc<Mutex<BackendStatus>>) -> std_mpsc::Sender<EmuCmd> {
     let (tx, rx) = std_mpsc::channel::<EmuCmd>();
     std::thread::Builder::new()
         .name("skerry-emulation".into())
@@ -480,6 +506,7 @@ fn spawn_emulation(mut emu: Box<dyn Emulation>) -> std_mpsc::Sender<EmuCmd> {
                             emu.button(b, false);
                         }
                     }
+                    EmuCmd::RefreshStatus => *status.lock().unwrap() = emu.status(),
                 }
             }
         })
@@ -569,6 +596,7 @@ fn placeholder_snapshot() -> Snapshot {
             swap_cmd_ctrl: true,
             edge_switching: true,
             block_switch_while_dragging: true,
+            check_updates: true,
         },
         layout: Layout::default(),
         peers: vec![],
@@ -579,6 +607,7 @@ fn placeholder_snapshot() -> Snapshot {
         hotkeys: vec![],
         manual_peers: vec![],
         listen_error: None,
+        scanning: false,
     }
 }
 
@@ -595,6 +624,7 @@ struct Engine {
     capture_status: BackendStatus,
     emulation_status: BackendStatus,
     emu: std_mpsc::Sender<EmuCmd>,
+    emu_status: Arc<Mutex<BackendStatus>>,
     screen: Box<dyn ScreenSource>,
     clip: ClipboardHandle,
     discovery: Option<Discovery>,
@@ -628,6 +658,10 @@ struct Engine {
     internal_tx: mpsc::UnboundedSender<Internal>,
     conn_tx: mpsc::UnboundedSender<ConnEvent>,
     listen_error: Option<String>,
+    /// Plain-language reason the last connection attempt to a peer failed.
+    last_errors: HashMap<String, String>,
+    scanning: bool,
+    scan_extra: Vec<SocketAddr>,
     dirty: bool,
 }
 
@@ -717,35 +751,101 @@ impl Engine {
         let hello = self.hello.read().unwrap().clone();
         let tx = self.internal_tx.clone();
         tokio::spawn(async move {
-            let mut last_err = String::from("no address to try");
-            for target in targets {
-                let addrs = match tokio::task::spawn_blocking(move || resolve(&target, DEFAULT_PORT)).await {
-                    Ok(Ok(a)) => a,
-                    Ok(Err(e)) => {
-                        last_err = format!("{e:#}");
-                        continue;
-                    }
-                    Err(e) => {
-                        last_err = e.to_string();
-                        continue;
-                    }
-                };
-                for addr in addrs {
-                    let attempt = async {
-                        let stream = transport::connect(addr).await?;
-                        establish(stream, &private, true, hello.clone()).await
-                    };
-                    match attempt.await {
-                        Ok((session, peer_hello)) => {
-                            let _ = tx.send(Internal::Established { session, hello: peer_hello, intent });
-                            return;
+            let result = async {
+                let addrs = tokio::task::spawn_blocking(move || {
+                    let mut all = Vec::new();
+                    let mut last_err = None;
+                    for t in &targets {
+                        match resolve(t, DEFAULT_PORT) {
+                            Ok(a) => all.extend(a),
+                            Err(e) => last_err = Some(e),
                         }
-                        Err(e) => last_err = format!("{e:#}"),
                     }
+                    match (all.is_empty(), last_err) {
+                        (true, Some(e)) => Err(e),
+                        _ => Ok(net::order_candidates(all, &net::local_ipv4())),
+                    }
+                })
+                .await??;
+                let (stream, _) = net::connect_any(addrs).await?;
+                establish(stream, &private, true, hello).await
+            };
+            match result.await {
+                Ok((session, peer_hello)) => {
+                    let _ = tx.send(Internal::Established { session, hello: peer_hello, intent });
+                }
+                Err(e) => {
+                    let _ = tx.send(Internal::DialFailed { intent, error: format!("{e:#}") });
                 }
             }
-            let _ = tx.send(Internal::DialFailed { intent, error: last_err });
         });
+    }
+
+    /// Sweep the local network for other Skerry computers. Every address
+    /// that accepts a connection on the Skerry port gets a full handshake, so
+    /// the results are real Skerry installs with their names.
+    fn start_scan(&mut self) {
+        if self.scanning {
+            return;
+        }
+        self.scanning = true;
+        self.dirty = true;
+        let skip: HashSet<std::net::IpAddr> =
+            self.online.values().filter_map(|c| self.conns.get(c)).map(|c| c.addr.ip()).collect();
+        let mut ports = vec![DEFAULT_PORT];
+        if self.cfg.port != DEFAULT_PORT {
+            ports.push(self.cfg.port);
+        }
+        let extra = self.scan_extra.clone();
+        let private = self.identity.private;
+        let hello = self.hello.read().unwrap().clone();
+        let tx = self.internal_tx.clone();
+        tokio::spawn(async move {
+            let hosts = tokio::task::spawn_blocking(|| net::sweep_hosts(&net::local_ipv4())).await.unwrap_or_default();
+            let mut targets: Vec<SocketAddr> = hosts
+                .into_iter()
+                .filter(|ip| !skip.contains(&std::net::IpAddr::V4(*ip)))
+                .flat_map(|ip| ports.iter().map(move |p| SocketAddr::new(ip.into(), *p)))
+                .collect();
+            targets.extend(extra);
+            let probed = targets.len();
+            let limit = Arc::new(tokio::sync::Semaphore::new(128));
+            let mut set = tokio::task::JoinSet::new();
+            for addr in targets {
+                let (limit, tx, hello) = (limit.clone(), tx.clone(), hello.clone());
+                set.spawn(async move {
+                    let Ok(_permit) = limit.acquire().await else { return };
+                    let Ok(Ok(stream)) = tokio::time::timeout(SCAN_CONNECT_TIMEOUT, TcpStream::connect(addr)).await
+                    else {
+                        return;
+                    };
+                    if let Ok((session, peer_hello)) = establish(stream, &private, true, hello).await {
+                        let _ = tx.send(Internal::Established { session, hello: peer_hello, intent: Intent::Probe });
+                    }
+                });
+            }
+            while set.join_next().await.is_some() {}
+            let _ = tx.send(Internal::ScanFinished { probed });
+        });
+    }
+
+    fn rescan(&mut self) {
+        // Forget what discovery reported earlier; live computers answer again.
+        self.discovered.retain(|id, _| self.cfg.peer(id).is_some());
+        if let Some(d) = &self.discovery {
+            if let Err(e) = d.rescan(&self.cfg.name) {
+                tracing::warn!("mDNS rescan failed: {e:#}");
+            }
+        }
+        let now = Instant::now();
+        for r in self.reconnect.values_mut().chain(self.manual.values_mut()) {
+            if !r.in_progress {
+                r.next_at = now;
+                r.backoff = Duration::from_secs(1);
+            }
+        }
+        self.start_scan();
+        self.dirty = true;
     }
 
     fn on_established(&mut self, session: Session, hello: Hello, intent: Intent) {
@@ -825,6 +925,21 @@ impl Engine {
             (None, Intent::Incoming) => {
                 // Unknown computer: it may now ask to pair.
             }
+            (None, Intent::Probe) => {
+                // Found by a network scan: list it under Nearby, then hang up.
+                let d = Discovered {
+                    id: peer_id.clone(),
+                    name: hello.name.clone(),
+                    os: hello.os,
+                    version: hello.app_version.clone(),
+                    addrs: vec![SocketAddr::new(addr.ip(), hello.port)],
+                };
+                if self.discovered.get(&peer_id) != Some(&d) {
+                    self.discovered.insert(peer_id, d);
+                    self.dirty = true;
+                }
+                self.close_conn(conn_id);
+            }
             (None, _) => self.close_conn(conn_id),
         }
     }
@@ -833,6 +948,7 @@ impl Engine {
         let Some(conn) = self.conns.get_mut(&conn_id) else { return };
         conn.authed = true;
         let pid = conn.peer_id.clone();
+        self.last_errors.remove(&pid);
         let name = conn.hello.name.clone();
         let os = conn.hello.os;
         let addr = format!("{}", SocketAddr::new(conn.addr.ip(), conn.hello.port));
@@ -1122,7 +1238,11 @@ impl Engine {
                         let me = self.my_id.clone();
                         self.enter(id, edge.opposite(), frac, me, home);
                     }
-                    _ => self.capture.release(None),
+                    _ => {
+                        // Not switching after all: put the cursor back where it was.
+                        let p = self.local_desktop.clamp(x, y);
+                        self.capture.release(Some(self.local_desktop.inset(edge, p, 2.0)));
+                    }
                 }
             }
             CaptureEvent::Motion { dx, dy } => self.on_motion(dx, dy),
@@ -1292,8 +1412,17 @@ impl Engine {
         match ev {
             Internal::Established { session, hello, intent } => self.on_established(session, hello, intent),
             Internal::DialFailed { intent, error } => match intent {
-                Intent::Pair(s) => self.finish_pairing(s, false, format!("Couldn't connect: {error}")),
+                Intent::Pair(s) => {
+                    tracing::warn!("pairing connection failed: {error}");
+                    self.finish_pairing(s, false, net::friendly_error(&error, self.os));
+                }
                 Intent::Reconnect(id) => {
+                    tracing::info!("reconnect to {id} failed: {error}");
+                    let friendly = net::friendly_error(&error, self.os);
+                    if self.last_errors.get(&id) != Some(&friendly) {
+                        self.last_errors.insert(id.clone(), friendly);
+                        self.dirty = true;
+                    }
                     if let Some(r) = self.reconnect.get_mut(&id) {
                         r.in_progress = false;
                         r.backoff = (r.backoff * 2).min(MAX_RECONNECT_BACKOFF);
@@ -1306,8 +1435,13 @@ impl Engine {
                         r.next_at = Instant::now() + MANUAL_RETRY;
                     }
                 }
-                Intent::Incoming => {}
+                Intent::Incoming | Intent::Probe => {}
             },
+            Internal::ScanFinished { probed } => {
+                tracing::info!("network scan finished ({probed} addresses probed)");
+                self.scanning = false;
+                self.dirty = true;
+            }
             Internal::ClipRead { to, content } => {
                 if let Some((content, hash)) = content {
                     self.send_clipboard(to, content, hash);
@@ -1535,6 +1669,7 @@ impl Engine {
                     self.save();
                 }
             }
+            Command::Rescan => self.rescan(),
             Command::RemoveManualPeer(addr) => {
                 self.cfg.manual_peers.retain(|a| *a != addr);
                 self.manual.remove(&addr);
@@ -1654,6 +1789,9 @@ impl Engine {
         if let Some(v) = u.block_switch_while_dragging {
             self.cfg.block_switch_while_dragging = v;
             self.capture.set_block_while_dragging(v);
+        }
+        if let Some(v) = u.check_updates {
+            self.cfg.check_updates = v;
         }
         self.save();
         self.update_edges();
@@ -1792,6 +1930,13 @@ impl Engine {
                 self.capture_status = cs;
                 self.dirty = true;
             }
+            // Permissions can be granted while Skerry runs: refresh the status.
+            let _ = self.emu.send(EmuCmd::RefreshStatus);
+            let es = self.emu_status.lock().unwrap().clone();
+            if es != self.emulation_status {
+                self.emulation_status = es;
+                self.dirty = true;
+            }
         }
     }
 
@@ -1842,6 +1987,7 @@ impl Engine {
                     edge: self.cfg.layout.edge_of(&p.id),
                     speed: p.speed,
                     version: conn.map(|c| c.hello.app_version.clone()),
+                    last_error: if conn.is_some() { None } else { self.last_errors.get(&p.id).cloned() },
                 }
             })
             .collect();
@@ -1862,6 +2008,7 @@ impl Engine {
                 edge: None,
                 speed: 1.0,
                 version: Some(d.version.clone()),
+                last_error: None,
             });
         }
         peers.sort_by(|a, b| b.paired.cmp(&a.paired).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -1909,6 +2056,7 @@ impl Engine {
                 swap_cmd_ctrl: self.cfg.swap_cmd_ctrl,
                 edge_switching: self.cfg.edge_switching,
                 block_switch_while_dragging: self.cfg.block_switch_while_dragging,
+                check_updates: self.cfg.check_updates,
             },
             layout: self.cfg.layout.clone(),
             peers,
@@ -1919,6 +2067,7 @@ impl Engine {
             hotkeys: self.cfg.hotkeys.clone(),
             manual_peers: self.cfg.manual_peers.clone(),
             listen_error: self.listen_error.clone(),
+            scanning: self.scanning,
         }
     }
 }

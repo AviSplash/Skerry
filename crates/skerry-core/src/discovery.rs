@@ -54,6 +54,7 @@ pub struct Discovery {
     os: OsKind,
     port: u16,
     fullname: Mutex<Option<String>>,
+    tx: UnboundedSender<DiscoveryEvent>,
 }
 
 impl Discovery {
@@ -65,11 +66,17 @@ impl Discovery {
         tx: UnboundedSender<DiscoveryEvent>,
     ) -> Result<Discovery> {
         let daemon = ServiceDaemon::new()?;
-        let me = Discovery { daemon, id: id.to_string(), os, port, fullname: Mutex::new(None) };
+        let me = Discovery { daemon, id: id.to_string(), os, port, fullname: Mutex::new(None), tx };
         me.advertise(name)?;
+        me.browse()?;
+        Ok(me)
+    }
 
-        let rx = me.daemon.browse(SERVICE_TYPE)?;
-        let my_id = id.to_string();
+    /// Start browsing; results are sent to the engine from a background thread.
+    fn browse(&self) -> Result<()> {
+        let rx = self.daemon.browse(SERVICE_TYPE)?;
+        let my_id = self.id.clone();
+        let tx = self.tx.clone();
         std::thread::Builder::new().name("skerry-discovery".into()).spawn(move || {
             while let Ok(ev) = rx.recv() {
                 let out = match ev {
@@ -102,7 +109,15 @@ impl Discovery {
                 }
             }
         })?;
-        Ok(me)
+        Ok(())
+    }
+
+    /// Ask the network again: announce ourselves and restart browsing, which
+    /// sends fresh queries so every running Skerry answers.
+    pub fn rescan(&self, name: &str) -> Result<()> {
+        let _ = self.daemon.stop_browse(SERVICE_TYPE);
+        self.advertise(name)?;
+        self.browse()
     }
 
     /// (Re-)publish this computer under `name`.

@@ -76,10 +76,15 @@ struct Node {
 
 impl Node {
     async fn new(os: OsKind) -> Node {
+        Node::with(os, |_| {}).await
+    }
+
+    async fn with(os: OsKind, tweak: impl FnOnce(&mut EngineOptions)) -> Node {
         let dir = tempfile::tempdir().unwrap();
         let mut opts = EngineOptions::new(Paths::in_dir(dir.path()));
         opts.discovery = false;
         opts.listen = Some("127.0.0.1:0".parse::<SocketAddr>().unwrap());
+        tweak(&mut opts);
         let (tx, rx) = mpsc::unbounded_channel();
         let cap = Arc::new(Mutex::new(CapState::default()));
         let emu = Arc::new(Mutex::new(Vec::new()));
@@ -270,4 +275,33 @@ async fn hop_across_three_computers() {
     a.send(CaptureEvent::Motion { dx: -5.0, dy: 0.0 });
     wait_for("back on B", || a.h.snapshot().focus == FocusView::Controlling(b.id.clone())).await;
     wait_for("B entered from right", || b.emu_has(&Emu::Motion(1919.0, 270.0))).await;
+}
+
+#[tokio::test]
+async fn scan_finds_computers_that_discovery_missed() {
+    let b = Node::new(OsKind::Windows).await;
+    let b_addr: SocketAddr = format!("127.0.0.1:{}", b.port).parse().unwrap();
+    // Discovery is off, so only the scan can find b.
+    let a = Node::with(OsKind::Macos, |o| o.scan_extra = vec![b_addr]).await;
+    assert!(a.h.snapshot().peers.is_empty());
+
+    a.h.rescan();
+    wait_for("b listed under nearby", || a.h.snapshot().peers.iter().any(|p| p.id == b.id && !p.paired)).await;
+    let peer = a.h.snapshot().peers.into_iter().find(|p| p.id == b.id).unwrap();
+    assert_eq!(peer.os, OsKind::Windows);
+    assert_eq!(peer.addr.as_deref(), Some(b_addr.to_string().as_str()));
+    // The probe hung up again: nothing is pending on b.
+    assert!(b.h.snapshot().pairings.is_empty());
+    for _ in 0..3 {
+        if !a.h.snapshot().scanning {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    assert!(!a.h.snapshot().scanning, "scan should finish");
+
+    // The scanned computer can be paired by picking it from the list.
+    let s = a.h.pair(PairTarget::Device(b.id.clone())).await.unwrap();
+    wait_for("code shown on b", || b.h.snapshot().pairings.iter().any(|p| p.stage == "show_code")).await;
+    a.h.cancel_pairing(s);
 }

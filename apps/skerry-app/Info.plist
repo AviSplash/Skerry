@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- macOS 15+ asks before apps talk to devices on the local network. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Skerry connects to your other computers on this network to share your mouse, keyboard and clipboard.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_skerry._tcp</string>
+  </array>
+</dict>
+</plist>

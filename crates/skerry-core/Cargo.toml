@@ -21,6 +21,7 @@ hex = "0.4"
 mdns-sd = "0.21"
 directories = "6"
 png = "0.18"
+if-addrs = "0.15"
 gethostname = "1"
 
 [dev-dependencies]

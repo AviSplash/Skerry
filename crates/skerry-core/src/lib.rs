@@ -17,6 +17,7 @@ pub mod geometry;
 pub mod identity;
 pub mod input;
 pub mod keys;
+pub mod net;
 pub mod pairing;
 pub mod proto;
 pub mod transport;

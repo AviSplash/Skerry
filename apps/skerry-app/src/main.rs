@@ -2,6 +2,9 @@
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
+mod diagnostics;
+mod firewall;
+
 use serde::Serialize;
 use skerry_core::clipboard::NullClipboard;
 use skerry_core::config::Paths;
@@ -11,21 +14,54 @@ use skerry_core::engine::{
 use skerry_core::geometry::Edge;
 use skerry_core::input::{BackendStatus, NullCapture, NullEmulation};
 use skerry_core::keys::OsKind;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, UserAttentionType, WindowEvent, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_updater::{Update, UpdaterExt};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+/// First automatic update check after start, then how often to check again.
+const FIRST_UPDATE_CHECK: Duration = Duration::from_secs(20);
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 struct AppState {
     engine: EngineHandle,
     backend: String,
     config_path: String,
+    log_dir: PathBuf,
 }
+
+/// The newest update found by the last check, ready to install.
+#[derive(Default)]
+struct Updates(Mutex<Option<Update>>);
+
+/// Tray menu entry for updates, relabelled when one is available.
+struct UpdateMenuItem(MenuItem<Wry>);
 
 #[derive(Serialize)]
 struct Info {
     backend: String,
     config_path: String,
+    log_dir: String,
+    version: String,
+}
+
+#[derive(Serialize, Clone)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct UpdateProgress {
+    downloaded: usize,
+    total: Option<u64>,
 }
 
 #[tauri::command]
@@ -35,7 +71,12 @@ fn get_state(state: State<'_, AppState>) -> Snapshot {
 
 #[tauri::command]
 fn get_info(state: State<'_, AppState>) -> Info {
-    Info { backend: state.backend.clone(), config_path: state.config_path.clone() }
+    Info {
+        backend: state.backend.clone(),
+        config_path: state.config_path.clone(),
+        log_dir: state.log_dir.display().to_string(),
+        version: skerry_core::APP_VERSION.to_string(),
+    }
 }
 
 #[tauri::command]
@@ -83,6 +124,12 @@ fn remove_manual_peer(state: State<'_, AppState>, addr: String) {
     state.engine.remove_manual_peer(&addr);
 }
 
+/// Look for computers on the network again.
+#[tauri::command]
+fn rescan(state: State<'_, AppState>) {
+    state.engine.rescan();
+}
+
 #[tauri::command]
 fn get_autostart(app: AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
@@ -94,15 +141,164 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
 }
 
-/// Open the OS page where the user grants input permissions.
+/// Open the OS page where the user grants a permission: "accessibility"
+/// (default), "input_monitoring" or "local_network".
 #[tauri::command]
-fn open_permission_settings() {
+fn open_permission_settings(pane: Option<String>) {
     #[cfg(target_os = "macos")]
     {
+        let anchor = match pane.as_deref() {
+            Some("input_monitoring") => "Privacy_ListenEvent",
+            Some("local_network") => "Privacy_LocalNetwork",
+            _ => "Privacy_Accessibility",
+        };
         let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .arg(format!("x-apple.systempreferences:com.apple.preference.security?{anchor}"))
             .spawn();
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = pane;
+}
+
+/// A report about this computer, its connections and recent log lines, for
+/// troubleshooting and bug reports.
+#[tauri::command]
+async fn get_diagnostics(state: State<'_, AppState>) -> Result<String, String> {
+    let snapshot = state.engine.snapshot();
+    let (backend, log_dir) = (state.backend.clone(), state.log_dir.clone());
+    tauri::async_runtime::spawn_blocking(move || diagnostics::report(&snapshot, &backend, &log_dir))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_logs(state: State<'_, AppState>) -> Result<(), String> {
+    let _ = std::fs::create_dir_all(&state.log_dir);
+    open_path(&state.log_dir).map_err(|e| e.to_string())
+}
+
+fn open_path(path: &std::path::Path) -> std::io::Result<()> {
+    let opener = if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener).arg(path).spawn().map(|_| ())
+}
+
+/// Whether Windows Firewall lets other computers connect to Skerry:
+/// "ok", "blocked", "missing", "unknown", or "n/a" on other systems.
+#[tauri::command]
+async fn firewall_status(state: State<'_, AppState>) -> Result<String, String> {
+    let port = state.engine.snapshot().me.port;
+    tauri::async_runtime::spawn_blocking(move || firewall::status(port)).await.map_err(|e| e.to_string())
+}
+
+/// Add a Windows Firewall rule that allows Skerry (asks for administrator
+/// approval), then report the new status.
+#[tauri::command]
+async fn fix_firewall(state: State<'_, AppState>) -> Result<String, String> {
+    let port = state.engine.snapshot().me.port;
+    tauri::async_runtime::spawn_blocking(move || {
+        firewall::allow()?;
+        Ok(firewall::status(port))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    find_update(&app).await
+}
+
+/// Download the update found earlier, install it and restart Skerry.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let pending = app.state::<Updates>().0.lock().unwrap().clone();
+    let update = match pending {
+        Some(u) => u,
+        None => {
+            let updater = app.updater().map_err(|e| e.to_string())?;
+            match updater.check().await.map_err(check_error)? {
+                Some(u) => u,
+                None => return Err("Skerry is already up to date.".into()),
+            }
+        }
+    };
+    tracing::info!("downloading Skerry {}", update.version);
+    let progress = app.clone();
+    let mut downloaded = 0usize;
+    let mut last_percent = None;
+    let bytes = update
+        .download(
+            move |chunk, total| {
+                downloaded += chunk;
+                let percent = total.map(|t| downloaded as u64 * 100 / t.max(1));
+                if percent != last_percent || total.is_none() {
+                    last_percent = percent;
+                    let _ = progress.emit("update-progress", UpdateProgress { downloaded, total });
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    tracing::info!("installing Skerry {}", update.version);
+    let engine = app.state::<AppState>().engine.clone();
+    // On Windows the installer replaces the running program and the call
+    // below exits, so let other computers know first.
+    #[cfg(target_os = "windows")]
+    engine.shutdown().await;
+    if let Err(e) = update.install(bytes) {
+        tracing::error!("installing the update failed: {e}");
+        #[cfg(target_os = "windows")]
+        app.restart();
+        #[cfg(not(target_os = "windows"))]
+        return Err(format!("Installing the update failed: {e}"));
+    }
+    engine.shutdown().await;
+    app.restart();
+}
+
+fn check_error(e: tauri_plugin_updater::Error) -> String {
+    tracing::info!("update check failed: {e}");
+    let raw = e.to_string();
+    if raw.contains("valid release JSON") || raw.contains("404") {
+        "Couldn't get update information. Check the internet connection, or download the latest version from \
+         github.com/AviSplash/Skerry/releases."
+            .into()
+    } else if raw.contains("platforms") {
+        "Automatic updates aren't available for this kind of installation. Download the latest version from \
+         github.com/AviSplash/Skerry/releases."
+            .into()
+    } else {
+        format!("Couldn't check for updates: {raw}")
+    }
+}
+
+async fn find_update(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let found = updater.check().await.map_err(check_error)?;
+    let info = found.as_ref().map(|u| UpdateInfo {
+        version: u.version.clone(),
+        current: u.current_version.clone(),
+        notes: u.body.clone(),
+    });
+    *app.state::<Updates>().0.lock().unwrap() = found;
+    let label = match &info {
+        Some(i) => {
+            tracing::info!("update available: {}", i.version);
+            let _ = app.emit("update", i);
+            format!("Install update {}…", i.version)
+        }
+        None => "Check for updates…".to_string(),
+    };
+    let _ = app.state::<UpdateMenuItem>().0.set_text(label);
+    Ok(info)
 }
 
 fn show_main(app: &AppHandle) {
@@ -110,6 +306,17 @@ fn show_main(app: &AppHandle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
+    }
+}
+
+/// Bring the window up for a pairing code. Windows and macOS may refuse to
+/// focus a background app, so also ask for attention and keep the window on
+/// top while the code is showing.
+fn show_for_pairing(app: &AppHandle) {
+    show_main(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_always_on_top(true);
+        let _ = w.request_user_attention(Some(UserAttentionType::Critical));
     }
 }
 
@@ -141,21 +348,50 @@ fn tray_text(s: &Snapshot) -> (String, &'static str) {
     (tip, if s.settings.enabled { "Pause sharing" } else { "Resume sharing" })
 }
 
+/// Log to the terminal and to daily files in `<config dir>/logs` (the last
+/// week is kept), so problems can be diagnosed after the fact.
+fn init_logging(log_dir: &std::path::Path) {
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tao=warn,wry=warn".into());
+    let file = std::fs::create_dir_all(log_dir).ok().and_then(|_| {
+        tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("skerry")
+            .filename_suffix("log")
+            .max_log_files(7)
+            .build(log_dir)
+            .ok()
+    });
+    let file_layer = file.map(|f| tracing_subscriber::fmt::layer().with_ansi(false).with_writer(f));
+    tracing_subscriber::registry().with(filter).with(tracing_subscriber::fmt::layer()).with(file_layer).init();
+}
+
 fn main() {
     skerry_platform::init_process();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tao=warn,wry=warn".into()),
-        )
-        .init();
+    let paths = match Paths::default_location() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Skerry: {e:#}");
+            std::process::exit(1);
+        }
+    };
+    let log_dir = paths.dir.join("logs");
+    init_logging(&log_dir);
+    tracing::info!(
+        "Skerry {} starting on {} ({})",
+        skerry_core::APP_VERSION,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
 
     let minimized = std::env::args().any(|a| a == "--minimized");
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(Updates::default())
         .setup(move |app| {
-            let paths = Paths::default_location()?;
             let config_path = paths.config.display().to_string();
             let (engine, backend) = tauri::async_runtime::block_on(async move {
                 let (backends, backend) = match skerry_platform::backends().await {
@@ -173,9 +409,13 @@ fn main() {
             // Tray icon.
             let open = MenuItem::with_id(app, "open", "Open Skerry", true, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "Pause sharing", true, None::<&str>)?;
+            let scan = MenuItem::with_id(app, "scan", "Scan network", true, None::<&str>)?;
+            let updates = MenuItem::with_id(app, "updates", "Check for updates…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Skerry", true, None::<&str>)?;
-            let sep = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open, &toggle, &sep, &quit])?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&open, &toggle, &scan, &sep1, &updates, &sep2, &quit])?;
+            app.manage(UpdateMenuItem(updates.clone()));
             let mut tray = TrayIconBuilder::with_id("skerry")
                 .menu(&menu)
                 .tooltip("Skerry")
@@ -186,6 +426,15 @@ fn main() {
                         let st = app.state::<AppState>();
                         let enabled = st.engine.snapshot().settings.enabled;
                         st.engine.update_settings(SettingsUpdate { enabled: Some(!enabled), ..Default::default() });
+                    }
+                    "scan" => {
+                        app.state::<AppState>().engine.rescan();
+                        show_main(app);
+                    }
+                    "updates" => {
+                        // The window shows the result and the install button.
+                        show_main(app);
+                        let _ = app.emit("menu-check-update", ());
                     }
                     "quit" => {
                         let engine = app.state::<AppState>().engine.clone();
@@ -213,6 +462,7 @@ fn main() {
             let toggle_item: MenuItem<Wry> = toggle.clone();
             tauri::async_runtime::spawn(async move {
                 let mut announced = std::collections::HashSet::new();
+                let mut on_top = false;
                 loop {
                     match events.recv().await {
                         Ok(ev) => {
@@ -223,9 +473,20 @@ fn main() {
                                 }
                                 let _ = toggle_item.set_text(label);
                                 // Someone wants to pair: bring the window up so the code is visible.
+                                let mut showing_code = false;
                                 for p in &s.pairings {
-                                    if p.stage == "show_code" && announced.insert(p.session) {
-                                        show_main(&handle);
+                                    if p.stage == "show_code" {
+                                        showing_code = true;
+                                        if announced.insert(p.session) {
+                                            show_for_pairing(&handle);
+                                            on_top = true;
+                                        }
+                                    }
+                                }
+                                if on_top && !showing_code {
+                                    on_top = false;
+                                    if let Some(w) = handle.get_webview_window("main") {
+                                        let _ = w.set_always_on_top(false);
                                     }
                                 }
                             }
@@ -237,7 +498,21 @@ fn main() {
                 }
             });
 
-            app.manage(AppState { engine, backend, config_path });
+            // Look for updates now and then, unless turned off in settings.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(FIRST_UPDATE_CHECK).await;
+                loop {
+                    let enabled = handle.state::<AppState>().engine.snapshot().settings.check_updates;
+                    if enabled {
+                        // Failures are logged by check_error.
+                        let _ = find_update(&handle).await;
+                    }
+                    tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
+                }
+            });
+
+            app.manage(AppState { engine, backend, config_path, log_dir });
             if !minimized {
                 show_main(app.handle());
             }
@@ -262,9 +537,16 @@ fn main() {
             set_speed,
             add_manual_peer,
             remove_manual_peer,
+            rescan,
             get_autostart,
             set_autostart,
             open_permission_settings,
+            get_diagnostics,
+            open_logs,
+            firewall_status,
+            fix_firewall,
+            check_update,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Skerry");

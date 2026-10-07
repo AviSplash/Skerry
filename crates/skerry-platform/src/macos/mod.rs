@@ -31,7 +31,7 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
 use skerry_core::geometry::{Desktop, Edge, EdgeSet, Rect};
 use skerry_core::input::{BackendStatus, Capture, CaptureEvent, CaptureSender, Emulation, ScreenSource};
-use skerry_core::keys::{code as k, Hotkey, HotkeyAction, HotkeyMatcher, KeyVerdict};
+use skerry_core::keys::{code as k, Hotkey, HotkeyAction, HotkeyMatcher, KeyVerdict, Mods};
 use skerry_core::proto::Button;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -44,14 +44,51 @@ type Parts = (Box<dyn Capture>, Box<dyn Emulation>, Box<dyn ScreenSource>, Strin
 /// Marks events posted by Skerry ("SKRY").
 const MAGIC: i64 = 0x534b_5259;
 
-const PERMISSION_HINT: &str =
-    "Allow Skerry in System Settings → Privacy & Security → Accessibility, then restart Skerry.";
+const PERMISSION_HINT: &str = "Allow Skerry in System Settings → Privacy & Security → Accessibility and \
+     Input Monitoring, then quit and reopen Skerry. After an update, remove Skerry from those lists and add it again.";
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
     static kAXTrustedCheckOptionPrompt: CFStringRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    // macOS 10.15+: the "Input Monitoring" permission needed to see keys.
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
+    fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+}
+
+/// Ask for Input Monitoring (needed to see keystrokes) if not yet granted.
+fn request_input_monitoring() -> bool {
+    unsafe { CGPreflightListenEventAccess() || CGRequestListenEventAccess() }
+}
+
+/// Is any mouse button physically down? (Combined session state.)
+fn any_button_down() -> bool {
+    unsafe { (0..3).any(|b| CGEventSourceButtonState(0, b)) }
+}
+
+/// Modifier keys held, from an event's flags (always current, unlike
+/// tracking key presses ourselves).
+fn mods_from_flags(flags: CGEventFlags) -> Mods {
+    let mut m = Mods::NONE;
+    if flags.contains(CGEventFlags::CGEventFlagControl) {
+        m = m.union(Mods::CTRL);
+    }
+    if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+        m = m.union(Mods::ALT);
+    }
+    if flags.contains(CGEventFlags::CGEventFlagShift) {
+        m = m.union(Mods::SHIFT);
+    }
+    if flags.contains(CGEventFlags::CGEventFlagCommand) {
+        m = m.union(Mods::META);
+    }
+    m
 }
 
 /// True if Skerry may observe and post input events. With `prompt`, macOS
@@ -133,6 +170,8 @@ pub struct MacCapture {
 impl MacCapture {
     fn new(tx: CaptureSender) -> MacCapture {
         let trusted = accessibility_trusted(true);
+        let listening = request_input_monitoring();
+        let trusted = trusted && listening;
         let shared = Arc::new(Shared {
             tx,
             edges: AtomicU8::new(0),
@@ -334,8 +373,9 @@ fn on_event(s: &Shared, etype: CGEventType, event: &CGEvent) -> CallbackResult {
                 },
             };
             let mut result = if grabbed { CallbackResult::Drop } else { CallbackResult::Keep };
+            let mods = mods_from_flags(event.get_flags());
             for pressed in presses {
-                match s.hotkeys.lock().unwrap().on_key(code, pressed) {
+                match s.hotkeys.lock().unwrap().on_key_with_mods(code, pressed, Some(mods)) {
                     KeyVerdict::Fire(action) => {
                         let _ = s.tx.send(CaptureEvent::Hotkey(action));
                         result = CallbackResult::Drop;
@@ -366,12 +406,12 @@ fn on_event(s: &Shared, etype: CGEventType, event: &CGEvent) -> CallbackResult {
 
 fn maybe_begin(s: &Shared, at: CGPoint, dx: f64, dy: f64) -> bool {
     let edges = EdgeSet::from_bits(s.edges.load(Ordering::Acquire));
-    if edges.is_empty() || (s.block_drag.load(Ordering::Relaxed) && s.buttons.load(Ordering::Relaxed) != 0) {
+    if edges.is_empty() || (s.block_drag.load(Ordering::Relaxed) && any_button_down()) {
         return false;
     }
     let desk = s.desktop.read().unwrap();
     let (x, y) = desk.clamp(at.x, at.y);
-    let Some(edge) = desk.edge_at(x, y) else { return false };
+    let Some(edge) = desk.edge_near(x, y, 1.0) else { return false };
     let pushing = match edge {
         Edge::Left => dx < 0.0,
         Edge::Right => dx > 0.0,

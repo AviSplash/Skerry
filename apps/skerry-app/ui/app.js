@@ -16,9 +16,17 @@ const EDGE_LABEL = { left: "on the left", right: "on the right", top: "above", b
 const EDGES = ["top", "left", "right", "bottom"];
 
 let state = null;
-let info = { backend: "", config_path: "" };
+let info = { backend: "", config_path: "", log_dir: "", version: "" };
 let dialogKey = null;
 const openRows = new Set();
+// An available update ({ version, current, notes }), and how far installing it got:
+// null (not started), a percentage, or "working" (size unknown / installing).
+let update = null;
+let updateProgress = null;
+let checkingUpdate = false;
+// Windows Firewall: "ok", "blocked", "missing", "unknown" or "n/a".
+let firewall = "n/a";
+let firewallCheckedAt = 0;
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
@@ -74,19 +82,44 @@ function statusBanner(status, what) {
   }[status.state];
   const action =
     status.state === "needs_permission" && state.me.os === "macos"
-      ? `<button class="btn small secondary" data-action="open-permissions">Open Privacy settings</button>`
+      ? `<div class="actions">
+           <button class="btn small secondary" data-action="open-permissions" data-pane="accessibility">Accessibility</button>
+           <button class="btn small secondary" data-action="open-permissions" data-pane="input_monitoring">Input Monitoring</button>
+         </div>`
       : "";
   return `<div class="banner ${kind}"><div class="text"><strong>${esc(title)}</strong>${esc(status.detail ?? "")}</div>${action}</div>`;
 }
 
+function updateBanner() {
+  if (!update) return "";
+  let progress = "";
+  if (updateProgress === "working") progress = `<progress aria-label="Updating"></progress>`;
+  else if (updateProgress !== null) progress = `<progress max="100" value="${updateProgress}" aria-label="Downloading the update"></progress>`;
+  const mac = state.me.os === "macos" ? " If Skerry stops responding to the mouse afterwards, remove it from Privacy & Security → Accessibility and add it again." : "";
+  return `<div class="banner info"><div class="text"><strong>Skerry ${esc(update.version)} is available</strong>You have ${esc(state.me.version)}. Updating keeps your pairings and settings, and Skerry restarts by itself.${esc(mac)}</div>
+    <div class="actions">${progress}<button class="btn small" data-action="install-update" ${updateProgress !== null ? "disabled" : ""}>${updateProgress !== null ? "Updating…" : "Update and restart"}</button></div></div>`;
+}
+
 function renderBanners() {
-  let html = "";
+  let html = updateBanner();
   html += statusBanner(state.capture, "share its mouse and keyboard");
   if (JSON.stringify(state.emulation) !== JSON.stringify(state.capture)) {
     html += statusBanner(state.emulation, "be controlled by other computers");
   }
   if (state.listen_error) {
     html += `<div class="banner error"><div class="text"><strong>Other computers can't connect</strong>${esc(state.listen_error)}</div></div>`;
+  }
+  if (firewall === "blocked" || firewall === "missing") {
+    const why =
+      firewall === "blocked"
+        ? "A Windows Firewall rule blocks Skerry, so other computers can't connect to this one (this computer can still connect to them)."
+        : "No Windows Firewall rule allows Skerry yet, so other computers may not be able to connect to this one.";
+    html += `<div class="banner warn"><div class="text"><strong>Windows Firewall is blocking Skerry</strong>${esc(why)}</div>
+      <div class="actions"><button class="btn small" data-action="fix-firewall">Allow Skerry</button></div></div>`;
+  }
+  if (state.me.os === "macos" && state.peers.some((p) => (p.last_error ?? "").includes("Local Network"))) {
+    html += `<div class="banner warn"><div class="text"><strong>macOS is blocking connections</strong>Turn on Skerry in System Settings → Privacy & Security → Local Network, then press Scan network.</div>
+      <div class="actions"><button class="btn small secondary" data-action="open-permissions" data-pane="local_network">Local Network settings</button></div></div>`;
   }
   $("#banners").innerHTML = html;
 }
@@ -144,6 +177,7 @@ function renderDevices() {
             <div class="name">${esc(p.name)}</div>
             <div class="meta"><span class="status-dot ${p.online ? "on" : ""}"></span>${p.online ? "Online" : "Offline"} · ${esc(OS_LABEL[p.os] ?? "")}${esc(where)}</div>
             <div class="actions"><button class="icon-btn" data-action="toggle-row" data-id="${esc(p.id)}" aria-expanded="${open}" aria-label="Details for ${esc(p.name)}">${open ? "▴" : "▾"}</button></div>
+            ${!p.online && p.last_error ? `<div class="problem">${esc(p.last_error)}</div>` : ""}
             <div class="extra">
               ${p.addr ? `<span>Address <code>${esc(p.addr)}</code></span>` : ""}
               ${p.fingerprint ? `<span>Key <code>${esc(p.fingerprint)}</code></span>` : ""}
@@ -167,7 +201,13 @@ function renderDevices() {
           </div>`,
         )
         .join("")
-    : `<div class="empty">Looking for other computers running Skerry on this network…</div>`;
+    : state.scanning
+      ? `<div class="empty">Scanning this network for computers running Skerry…</div>`
+      : `<div class="empty">Looking for other computers running Skerry on this network. If one doesn't show up, make sure Skerry is running on it and press <strong>Scan network</strong>, or pair by its address below.</div>`;
+
+  const scan = $("#scan");
+  scan.disabled = state.scanning;
+  scan.innerHTML = state.scanning ? `<span class="mini-spinner" aria-hidden="true"></span>Scanning…` : "Scan network";
 }
 
 function renderSettings() {
@@ -188,7 +228,8 @@ function renderSettings() {
     <dt>Port</dt><dd>${esc(state.me.port)}</dd>
     <dt>Input</dt><dd>${esc(info.backend)}</dd>
     <dt>Version</dt><dd>${esc(state.me.version)}</dd>
-    <dt>Settings file</dt><dd><code>${esc(info.config_path)}</code></dd>`;
+    <dt>Settings file</dt><dd><code>${esc(info.config_path)}</code></dd>
+    ${info.log_dir ? `<dt>Logs</dt><dd><code>${esc(info.log_dir)}</code></dd>` : ""}`;
 }
 
 function renderDialog() {
@@ -237,6 +278,95 @@ function renderDialog() {
   $("#pair-form").dataset.session = p.session;
   if (!dlg.open) dlg.showModal();
   $("#code-input")?.focus();
+}
+
+// ---------------------------------------------------------------------------
+// Updates, firewall and diagnostics
+// ---------------------------------------------------------------------------
+
+async function checkForUpdates(manual) {
+  if (checkingUpdate) return;
+  checkingUpdate = true;
+  try {
+    const found = await api.invoke("check_update");
+    if (found) {
+      update = found;
+      renderBanners();
+      if (manual) toast(`Skerry ${found.version} is available.`, "ok");
+    } else if (manual) {
+      toast(`You have the latest version of Skerry (${state.me.version}).`, "ok");
+    }
+  } catch (e) {
+    if (manual) toast(String(e), "error");
+  } finally {
+    checkingUpdate = false;
+  }
+}
+
+async function installUpdate() {
+  updateProgress = 0;
+  renderBanners();
+  try {
+    // Skerry restarts when this succeeds.
+    await api.invoke("install_update");
+  } catch (e) {
+    updateProgress = null;
+    renderBanners();
+    toast(String(e), "error");
+  }
+}
+
+function onUpdateProgress({ downloaded, total }) {
+  const next = total && downloaded < total ? Math.floor((downloaded * 100) / total) : "working";
+  if (next !== updateProgress) {
+    updateProgress = next;
+    renderBanners();
+  }
+}
+
+async function refreshFirewall() {
+  if (state?.me.os !== "windows" || Date.now() - firewallCheckedAt < 60_000) return;
+  firewallCheckedAt = Date.now();
+  try {
+    firewall = await api.invoke("firewall_status");
+  } catch {
+    firewall = "unknown";
+  }
+  renderBanners();
+}
+
+async function fixFirewall() {
+  try {
+    firewall = await api.invoke("fix_firewall");
+    toast(firewall === "ok" ? "Windows Firewall now lets other computers connect to Skerry." : "The firewall rule was added, but Windows still reports a problem.", firewall === "ok" ? "ok" : "error");
+  } catch (e) {
+    toast(String(e), "error");
+  }
+  firewallCheckedAt = Date.now();
+  renderBanners();
+}
+
+async function showDiagnostics() {
+  const text = $("#diag-text");
+  text.value = "Collecting…";
+  $("#diag-dialog").showModal();
+  try {
+    text.value = await api.invoke("get_diagnostics");
+  } catch (e) {
+    text.value = String(e);
+  }
+}
+
+async function copyDiagnostics() {
+  const text = $("#diag-text");
+  try {
+    await navigator.clipboard.writeText(text.value);
+  } catch {
+    text.focus();
+    text.select();
+    document.execCommand("copy");
+  }
+  toast("Copied. Paste it into your bug report or message.", "ok");
 }
 
 function toast(message, kind = "") {
@@ -323,8 +453,16 @@ function wire() {
       if (edge) call("set_layout", { edge, peer: null });
     } else if (action === "cancel-pairing") call("cancel_pairing", { session: Number(el.dataset.session) });
     else if (action === "remove-manual") call("remove_manual_peer", { addr: el.dataset.addr });
-    else if (action === "open-permissions") call("open_permission_settings");
+    else if (action === "open-permissions") call("open_permission_settings", { pane: el.dataset.pane ?? null });
+    else if (action === "install-update") installUpdate();
+    else if (action === "check-update") checkForUpdates(true);
+    else if (action === "fix-firewall") fixFirewall();
+    else if (action === "diagnostics") showDiagnostics();
+    else if (action === "copy-diagnostics") copyDiagnostics();
+    else if (action === "open-logs") call("open_logs");
   });
+  $("#scan").addEventListener("click", () => call("rescan"));
+  window.addEventListener("focus", refreshFirewall);
 
   document.addEventListener("change", (e) => {
     const el = e.target;
@@ -364,7 +502,14 @@ async function main() {
   [state, info] = await Promise.all([api.invoke("get_state"), api.invoke("get_info")]);
   render();
   await api.listen("engine", (e) => onEngineEvent(e.payload));
+  await api.listen("update", (e) => {
+    update = e.payload;
+    renderBanners();
+  });
+  await api.listen("update-progress", (e) => onUpdateProgress(e.payload));
+  await api.listen("menu-check-update", () => checkForUpdates(true));
   api.invoke("get_autostart").then((v) => ($("#autostart").checked = !!v));
+  refreshFirewall();
 }
 
 main();
@@ -376,13 +521,13 @@ main();
 function demoApi() {
   const listeners = [];
   const demo = {
-    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.0.0" },
-    settings: { enabled: true, clipboard_sync: true, swap_cmd_ctrl: true, edge_switching: true, block_switch_while_dragging: true },
+    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.1.0" },
+    settings: { enabled: true, clipboard_sync: true, swap_cmd_ctrl: true, edge_switching: true, block_switch_while_dragging: true, check_updates: true },
     layout: { left: "a1", right: "b2", top: null, bottom: null },
     peers: [
       { id: "a1", name: "MacBook Air", os: "macos", paired: true, online: true, available: true, discovered: true, addr: "192.168.1.31:24870", fingerprint: "9f3a-77c1-02be-d5e0-11aa", edge: "left", speed: 1.4, version: "1.0.0" },
       { id: "b2", name: "Gaming PC", os: "windows", paired: true, online: true, available: true, discovered: true, addr: "192.168.1.40:24870", fingerprint: "3b10-6d2e-8a44-c901-7f2b", edge: "right", speed: 1, version: "1.0.0" },
-      { id: "c3", name: "Office Laptop", os: "windows", paired: true, online: false, available: false, discovered: false, addr: "192.168.1.52:24870", fingerprint: "77de-a012-55c3-09ab-e4f1", edge: null, speed: 1, version: null },
+      { id: "c3", name: "Office Laptop", os: "windows", paired: true, online: false, available: false, discovered: false, addr: "192.168.1.52:24870", fingerprint: "77de-a012-55c3-09ab-e4f1", edge: null, speed: 1, version: null, last_error: "Couldn't reach it (no answer). Make sure Skerry is running on that computer and that its firewall allows Skerry (Windows: Settings → Windows Security → Firewall → Allow an app)." },
       { id: "d4", name: "living-room-nuc", os: "linux", paired: false, online: false, available: false, discovered: true, addr: "192.168.1.60:24870", fingerprint: null, edge: null, speed: 1, version: "1.0.0" },
     ],
     focus: new URLSearchParams(location.search).has("controlling") ? { kind: "controlling", peer: "b2" } : { kind: "local" },
@@ -398,6 +543,7 @@ function demoApi() {
     ],
     manual_peers: [],
     listen_error: null,
+    scanning: false,
   };
   if (new URLSearchParams(location.search).has("pairing")) {
     demo.pairings = [{ session: 7, peer_name: "living-room-nuc", peer_fingerprint: "5e21-0c9d-4b7a-a3f0-6612", stage: "show_code", code: "684858" }];
@@ -407,7 +553,16 @@ function demoApi() {
     async invoke(cmd, args = {}) {
       switch (cmd) {
         case "get_state": return structuredClone(demo);
-        case "get_info": return { backend: "Demo", config_path: "~/.config/skerry/config.toml" };
+        case "get_info": return { backend: "Demo", config_path: "~/.config/skerry/config.toml", log_dir: "~/.config/skerry/logs", version: "1.1.0" };
+        case "rescan":
+          demo.scanning = true;
+          setTimeout(() => { demo.scanning = false; emit(); }, 2500);
+          break;
+        case "check_update": return new URLSearchParams(location.search).has("update") ? { version: "1.2.0", current: "1.1.0", notes: null } : null;
+        case "install_update": throw "Updates can't be installed in the demo.";
+        case "firewall_status": return "n/a";
+        case "get_diagnostics": return "Skerry 1.1.0 on linux x86_64 (input: Demo)\nThis computer: Studio Desktop\n";
+        case "open_logs": case "open_permission_settings": case "fix_firewall": return null;
         case "get_autostart": return true;
         case "update_settings":
           for (const [k, v] of Object.entries(args.settings)) k === "name" ? (demo.me.name = v) : (demo.settings[k] = v);
@@ -438,6 +593,8 @@ function demoApi() {
       }
       setTimeout(emit, 0);
     },
-    async listen(_event, cb) { listeners.push(cb); },
+    async listen(event, cb) {
+      if (event === "engine") listeners.push(cb);
+    },
   };
 }

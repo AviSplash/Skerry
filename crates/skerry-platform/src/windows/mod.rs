@@ -19,7 +19,7 @@ mod keymap;
 use anyhow::{Context, Result};
 use skerry_core::geometry::{Desktop, EdgeSet, Rect};
 use skerry_core::input::{Capture, CaptureEvent, CaptureSender, Emulation, ScreenSource};
-use skerry_core::keys::{Hotkey, HotkeyAction, HotkeyMatcher, KeyVerdict};
+use skerry_core::keys::{Hotkey, HotkeyAction, HotkeyMatcher, KeyVerdict, Mods};
 use skerry_core::proto::Button;
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -33,20 +33,20 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
-    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
-    MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN,
+    MOUSEEVENTF_XUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateCursor, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
-    PostThreadMessageW, RegisterClassW, SetCursorPos, SetLayeredWindowAttributes, SetWindowPos, SetWindowsHookExW,
-    ShowWindow, TranslateMessage, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED,
-    LLMHF_INJECTED, LWA_ALPHA, MSG, MSLLHOOKSTRUCT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
+    CallNextHookEx, CreateCursor, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
+    GetSystemMetrics, PostThreadMessageW, RegisterClassW, SetCursorPos, SetLayeredWindowAttributes, SetWindowPos,
+    SetWindowsHookExW, ShowWindow, TranslateMessage, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+    LLKHF_INJECTED, LLMHF_INJECTED, LWA_ALPHA, MSG, MSLLHOOKSTRUCT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, XBUTTON1, XBUTTON2,
 };
 
@@ -105,6 +105,8 @@ struct Shared {
     /// Buttons physically held while not capturing.
     buttons: AtomicU8,
     park: Mutex<(i32, i32)>,
+    /// Where the cursor was when capture started.
+    origin: Mutex<(i32, i32)>,
     desktop: RwLock<Desktop>,
     hotkeys: Mutex<HotkeyMatcher>,
     /// Keys that went down locally before capture started; their key-up
@@ -132,6 +134,7 @@ impl WinCapture {
             grabbed: AtomicBool::new(false),
             buttons: AtomicU8::new(0),
             park: Mutex::new((0, 0)),
+            origin: Mutex::new((0, 0)),
             desktop: RwLock::new(Desktop::new(monitors())),
             hotkeys: Mutex::new(HotkeyMatcher::default()),
             local_keys: Mutex::new(HashSet::new()),
@@ -265,6 +268,10 @@ fn hider() -> Option<HWND> {
 
 /// Begin swallowing input. Runs on the hook thread.
 fn start_grab(s: &Shared) {
+    let mut cur = POINT::default();
+    if unsafe { GetCursorPos(&mut cur) }.is_ok() {
+        *s.origin.lock().unwrap() = (cur.x, cur.y);
+    }
     let primary = s.desktop.read().unwrap().displays.first().copied().unwrap_or(Rect::new(0, 0, 800, 600));
     let park = (primary.x + primary.w / 2, primary.y + primary.h / 2);
     *s.park.lock().unwrap() = park;
@@ -284,10 +291,33 @@ fn stop_grab(s: &Shared, warp: Option<(i32, i32)>) {
         if let Some(h) = hider() {
             let _ = ShowWindow(h, SW_HIDE);
         }
-        if let Some((x, y)) = warp {
-            let _ = SetCursorPos(x, y);
-        }
+        let (x, y) = warp.unwrap_or_else(|| *s.origin.lock().unwrap());
+        let _ = SetCursorPos(x, y);
     }
+}
+
+/// Is a key or mouse button physically down right now (as Windows sees it)?
+fn is_down(vk: i32) -> bool {
+    unsafe { GetAsyncKeyState(vk) as u16 & 0x8000 != 0 }
+}
+
+/// Modifier state as Windows reports it. Unlike our own tracking, this can't
+/// go stale when a key-up is never delivered to hooks (Win+L, Ctrl+Alt+Del).
+fn os_mods() -> Mods {
+    let mut m = Mods::NONE;
+    if is_down(0x11) {
+        m = m.union(Mods::CTRL);
+    }
+    if is_down(0x12) {
+        m = m.union(Mods::ALT);
+    }
+    if is_down(0x10) {
+        m = m.union(Mods::SHIFT);
+    }
+    if is_down(0x5b) || is_down(0x5c) {
+        m = m.union(Mods::META);
+    }
+    m
 }
 
 fn send(s: &Shared, ev: CaptureEvent) {
@@ -378,7 +408,11 @@ fn maybe_begin(s: &Shared, pt: POINT) -> bool {
     if edges.is_empty() {
         return false;
     }
-    if s.block_drag.load(Ordering::Relaxed) && s.buttons.load(Ordering::Relaxed) != 0 {
+    // Ask Windows which buttons are down rather than trusting our own
+    // tracking, which a missed button-up would leave stuck (and with it,
+    // switching disabled for good).
+    let dragging = is_down(0x01) || is_down(0x02) || is_down(0x04);
+    if s.block_drag.load(Ordering::Relaxed) && dragging {
         return false;
     }
     let (x, y) = {
@@ -419,7 +453,11 @@ fn on_key(s: &Shared, info: &KBDLLHOOKSTRUCT, pressed: bool) -> bool {
     let Some(code) = keymap::to_evdev(info.scanCode, info.flags.contains(LLKHF_EXTENDED), info.vkCode) else {
         return grabbed;
     };
-    let verdict = if injected { KeyVerdict::Pass } else { s.hotkeys.lock().unwrap().on_key(code, pressed) };
+    // While capturing, keys never reach Windows, so its key state is frozen:
+    // use our own tracking then, and Windows' state otherwise.
+    let os = if grabbed { None } else { Some(os_mods()) };
+    let verdict =
+        if injected { KeyVerdict::Pass } else { s.hotkeys.lock().unwrap().on_key_with_mods(code, pressed, os) };
     match verdict {
         KeyVerdict::Fire(action) => {
             send(s, CaptureEvent::Hotkey(action));
