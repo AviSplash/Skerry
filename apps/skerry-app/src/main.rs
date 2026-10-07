@@ -4,6 +4,7 @@
 
 mod diagnostics;
 mod firewall;
+mod login_item;
 
 use serde::Serialize;
 use skerry_core::clipboard::NullClipboard;
@@ -132,11 +133,17 @@ fn rescan(state: State<'_, AppState>) {
 
 #[tauri::command]
 fn get_autostart(app: AppHandle) -> bool {
+    if cfg!(target_os = "macos") {
+        return login_item::is_enabled();
+    }
     app.autolaunch().is_enabled().unwrap_or(false)
 }
 
 #[tauri::command]
 fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    if cfg!(target_os = "macos") {
+        return login_item::set(enabled, &app.config().identifier).map_err(|e| e.to_string());
+    }
     let al = app.autolaunch();
     if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
 }
@@ -522,6 +529,9 @@ fn main() {
                     tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
                 }
             });
+
+            #[cfg(target_os = "macos")]
+            login_item::upgrade(&app.config().identifier);
 
             app.manage(AppState { engine, backend, config_path, log_dir });
             if !minimized {

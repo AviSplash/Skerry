@@ -147,8 +147,9 @@ pub fn friendly_error(raw: &str, local_os: crate::keys::OsKind) -> String {
         "Connection refused: Skerry isn't running on that computer, or it uses a different port.".into()
     } else if e.contains("no route to host") || e.contains("os error 65") {
         if local_os == crate::keys::OsKind::Macos {
-            "macOS blocked the connection. Allow Skerry in System Settings → Privacy & Security → Local Network, \
-             then try again."
+            "macOS blocked the connection. Switch Skerry on in System Settings → Privacy & Security → Local Network \
+             (if it's already on, switch it off and on again). If that's not it, check that the other computer is \
+             on and still has this address, then click Scan network."
                 .into()
         } else {
             "No route to that computer. Check that both computers are on the same network.".into()

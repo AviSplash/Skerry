@@ -120,7 +120,7 @@ function renderBanners() {
       <div class="actions"><button class="btn small" data-action="fix-firewall">Allow Skerry</button></div></div>`;
   }
   if (state.me.os === "macos" && state.peers.some((p) => (p.last_error ?? "").includes("Local Network"))) {
-    html += `<div class="banner warn"><div class="text"><strong>macOS is blocking connections</strong>Turn on Skerry in System Settings → Privacy & Security → Local Network, then press Scan network.</div>
+    html += `<div class="banner warn"><div class="text"><strong>macOS may be blocking Skerry's connections</strong>Switch Skerry on in System Settings → Privacy & Security → Local Network. If it's already on, switch it off and on again, then click Scan network. Other computers can still connect to this Mac in the meantime.</div>
       <div class="actions"><button class="btn small secondary" data-action="open-permissions" data-pane="local_network">Local Network settings</button></div></div>`;
   }
   $("#banners").innerHTML = html;
