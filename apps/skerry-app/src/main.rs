@@ -5,6 +5,7 @@
 mod diagnostics;
 mod firewall;
 mod login_item;
+mod uninstall;
 
 use serde::Serialize;
 use skerry_core::clipboard::NullClipboard;
@@ -34,6 +35,7 @@ struct AppState {
     engine: EngineHandle,
     backend: String,
     config_path: String,
+    config_dir: PathBuf,
     log_dir: PathBuf,
 }
 
@@ -176,6 +178,43 @@ async fn reset_permissions(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("{e:#}"))
+}
+
+/// What uninstalling would remove on this computer, for the confirmation.
+#[tauri::command]
+async fn uninstall_plan(app: AppHandle) -> Result<uninstall::Summary, String> {
+    let dir = app.state::<AppState>().config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || uninstall::summary(&uninstall::plan(&app, &dir)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Remove Skerry and everything it stored on this computer, then quit.
+#[tauri::command]
+async fn uninstall(app: AppHandle) -> Result<(), String> {
+    let dir = app.state::<AppState>().config_dir.clone();
+    let handle = app.clone();
+    // The program itself goes first: if that fails or is cancelled, nothing
+    // else has been touched.
+    let plan = tauri::async_runtime::spawn_blocking(move || {
+        let plan = uninstall::plan(&handle, &dir);
+        uninstall::remove_app_first(&plan).map(|_| plan)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    tracing::info!("uninstalling Skerry");
+    let bundle_id = app.config().identifier.clone();
+    if cfg!(target_os = "macos") {
+        let _ = login_item::set(false, &bundle_id);
+    } else {
+        let _ = app.autolaunch().disable();
+    }
+    let engine = app.state::<AppState>().engine.clone();
+    engine.shutdown().await;
+    let script = uninstall::cleanup_script(&plan, std::process::id(), &bundle_id, true);
+    uninstall::start_cleanup(&script).map_err(|e| format!("Couldn't finish uninstalling: {e}"))?;
+    app.exit(0);
+    Ok(())
 }
 
 /// A report about this computer, its connections and recent log lines, for
@@ -411,6 +450,7 @@ fn main() {
         .manage(Updates::default())
         .setup(move |app| {
             let config_path = paths.config.display().to_string();
+            let config_dir = paths.dir.clone();
             let (engine, backend) = tauri::async_runtime::block_on(async move {
                 let (backends, backend) = match skerry_platform::backends().await {
                     Ok(b) => b,
@@ -533,7 +573,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             login_item::upgrade(&app.config().identifier);
 
-            app.manage(AppState { engine, backend, config_path, log_dir });
+            app.manage(AppState { engine, backend, config_path, config_dir, log_dir });
             if !minimized {
                 show_main(app.handle());
             }
@@ -563,6 +603,8 @@ fn main() {
             set_autostart,
             open_permission_settings,
             reset_permissions,
+            uninstall_plan,
+            uninstall,
             get_diagnostics,
             open_logs,
             firewall_status,

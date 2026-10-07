@@ -52,6 +52,8 @@ jobs:
         run: cargo build -p skerry-cli
       - name: Build desktop app
         run: cargo build -p skerry-app
+      - name: Desktop app tests (uninstall script, login item)
+        run: cargo test -p skerry-app
       - name: macOS signing keeps one identity across builds
         if: runner.os == 'macOS'
         run: |

@@ -335,6 +335,38 @@ async function resetPermissions() {
   }
 }
 
+async function showUninstall() {
+  $("#uninstall-items").innerHTML = "<li>Checking what to remove…</li>";
+  $("#uninstall-paths").innerHTML = "";
+  $("#uninstall-notes").innerHTML = "";
+  const confirmBtn = $('[data-action="confirm-uninstall"]');
+  confirmBtn.disabled = true;
+  $("#uninstall-dialog").showModal();
+  try {
+    const s = await api.invoke("uninstall_plan");
+    $("#uninstall-items").innerHTML = s.items.map((i) => `<li>${esc(i)}</li>`).join("");
+    $("#uninstall-paths").innerHTML = s.paths.map((p) => `<li><code>${esc(p)}</code></li>`).join("");
+    $("#uninstall-notes").innerHTML = s.notes.map((n) => `<p class="small">${esc(n)}</p>`).join("");
+    confirmBtn.disabled = false;
+  } catch (e) {
+    $("#uninstall-dialog").close();
+    toast(String(e), "error");
+  }
+}
+
+async function confirmUninstall(btn) {
+  btn.disabled = true;
+  btn.textContent = "Uninstalling…";
+  try {
+    // Skerry quits once this succeeds.
+    await api.invoke("uninstall");
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Uninstall Skerry";
+    toast(String(e), "error");
+  }
+}
+
 async function refreshFirewall() {
   if (state?.me.os !== "windows" || Date.now() - firewallCheckedAt < 60_000) return;
   firewallCheckedAt = Date.now();
@@ -469,6 +501,8 @@ function wire() {
     else if (action === "check-update") checkForUpdates(true);
     else if (action === "fix-firewall") fixFirewall();
     else if (action === "reset-permissions") resetPermissions();
+    else if (action === "uninstall") showUninstall();
+    else if (action === "confirm-uninstall") confirmUninstall(el);
     else if (action === "diagnostics") showDiagnostics();
     else if (action === "copy-diagnostics") copyDiagnostics();
     else if (action === "open-logs") call("open_logs");
@@ -577,6 +611,13 @@ function demoApi() {
         case "firewall_status": return "n/a";
         case "get_diagnostics": return "Skerry 1.1.0 on linux x86_64 (input: Demo)\nThis computer: Studio Desktop\n";
         case "open_logs": case "open_permission_settings": case "fix_firewall": case "reset_permissions": return null;
+        case "uninstall_plan":
+          return {
+            items: ["The Skerry package “skerry” (deb); Linux asks for your password", "Your Skerry settings, pairings and this computer's Skerry key", "Skerry's logs, saved window data and caches", "Skerry's “Start at login” entry"],
+            paths: ["~/.config/skerry", "~/.local/share/org.skerry.app", "~/.cache/org.skerry.app", "~/.config/autostart/Skerry.desktop"],
+            notes: ["Your other computers keep this one in their list until you click Forget on them."],
+          };
+        case "uninstall": throw "Uninstalling isn't possible in the demo.";
         case "get_autostart": return true;
         case "update_settings":
           for (const [k, v] of Object.entries(args.settings)) k === "name" ? (demo.me.name = v) : (demo.settings[k] = v);

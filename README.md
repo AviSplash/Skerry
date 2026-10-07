@@ -70,6 +70,17 @@ The current builds are not code-signed (signing certificates cost money; see [Ro
 - **macOS:** open the `.dmg`, drag Skerry to Applications, then **right-click Skerry → Open** the first time. When asked, switch Skerry on under **System Settings → Privacy & Security → Accessibility** (and **Input Monitoring** if macOS lists it there too). When macOS asks whether Skerry may find devices on your local network, click **Allow**.
 - **Linux:** on GNOME or KDE (Wayland), approve the "Remote desktop" and "Input capture" requests the first time. Skerry remembers your answer. On X11 nothing extra is needed.
 
+### Uninstalling
+
+Open **Settings → Advanced → Uninstall Skerry…**. Skerry lists exactly what it will remove and asks you to confirm, then removes itself and everything it stored on that computer and quits:
+
+- **All systems:** your settings, pairings and the computer's Skerry key, logs, saved window data and caches, and the "Start at login" entry.
+- **Windows:** the program, its shortcuts and its Apps & features entry (through its own uninstaller), its registry entries, and its Windows Firewall rules (Windows asks for administrator approval).
+- **macOS:** the app, its preferences and saved state, and its Accessibility and Input Monitoring entries. macOS doesn't let apps remove their **Local Network** entry; it stays in that list but does nothing once Skerry is gone.
+- **Linux:** the `.deb` or `.rpm` package (Linux asks for your password) or the AppImage file.
+
+If removing the program itself fails or you cancel the password prompt, nothing else is removed. Your other computers keep this one in their list until you click **Forget** on them. You can also uninstall the usual way (Apps & features, dragging the app to the Trash, `apt remove skerry`); that leaves your settings behind.
+
 ## Getting started
 
 1. Start Skerry on two computers on the same network. Each one shows the other under **Nearby**. If it doesn't appear within a few seconds, click **Scan network**.

@@ -16,8 +16,18 @@ pub fn allow() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn has_rules() -> bool {
+    false
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn remove_rules() -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
-pub use imp::{allow, status};
+pub use imp::{allow, has_rules, remove_rules, status};
 
 #[cfg(target_os = "windows")]
 mod imp {
@@ -32,6 +42,11 @@ mod imp {
     const MATCH_RULES: &str = "$rules = @(Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | \
         Where-Object { $_.Program -and ([Environment]::ExpandEnvironmentVariables($_.Program) -ieq $p) } | \
         Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Direction -eq 'Inbound' })";
+
+    /// Every rule for the program in `$p`, plus the one named Skerry.
+    const ALL_RULES: &str = "$rules = @(Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | \
+        Where-Object { $_.Program -and ([Environment]::ExpandEnvironmentVariables($_.Program) -ieq $p) } | \
+        Get-NetFirewallRule -ErrorAction SilentlyContinue) + @(Get-NetFirewallRule -Name 'Skerry' -ErrorAction SilentlyContinue)";
 
     fn exe() -> Result<String, String> {
         std::env::current_exe().map(|p| p.display().to_string()).map_err(|e| e.to_string())
@@ -103,6 +118,26 @@ mod imp {
         }
     }
 
+    /// Whether any firewall rule belongs to Skerry.
+    pub fn has_rules() -> bool {
+        let Ok(exe) = exe() else { return false };
+        let script = format!("$p = {}\n{ALL_RULES}\nif ($rules.Count -gt 0) {{ 'yes' }} else {{ 'no' }}", quote(&exe));
+        powershell(&script).is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("yes"))
+    }
+
+    /// Delete every firewall rule that belongs to Skerry (for uninstalling).
+    /// Shows the Windows administrator prompt.
+    pub fn remove_rules() -> Result<(), String> {
+        let exe = exe()?;
+        let inner = format!(
+            "$ErrorActionPreference = 'Stop'\n$p = {}\n{ALL_RULES}\n$rules | Remove-NetFirewallRule -ErrorAction SilentlyContinue",
+            quote(&exe)
+        );
+        run_elevated(&inner).map_err(|e| format!("{e} Nothing was removed."))?;
+        tracing::info!("removed Skerry's Windows Firewall rules");
+        Ok(())
+    }
+
     /// Replace Skerry's inbound rules with one that allows it on every
     /// network type. Shows the Windows administrator prompt.
     pub fn allow() -> Result<(), String> {
@@ -118,18 +153,22 @@ mod imp {
                  -Direction Inbound -Action Allow -Program $p -Profile Any | Out-Null",
             path = quote(&exe)
         );
+        run_elevated(&inner)?;
+        tracing::info!("added a Windows Firewall rule for Skerry");
+        Ok(())
+    }
+
+    /// Run a PowerShell script as administrator (Windows asks the user).
+    fn run_elevated(inner: &str) -> Result<(), String> {
         let outer = format!(
             "try {{ $proc = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
              -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{}'; exit $proc.ExitCode }} \
              catch {{ exit {DECLINED} }}",
-            encode(&inner)
+            encode(inner)
         );
         let out = powershell(&outer).map_err(|e| e.to_string())?;
         match out.status.code() {
-            Some(0) => {
-                tracing::info!("added a Windows Firewall rule for Skerry");
-                Ok(())
-            }
+            Some(0) => Ok(()),
             Some(DECLINED) => Err("The change needs administrator approval, which was declined.".into()),
             code => Err(format!(
                 "Couldn't change the firewall (exit code {code:?}). {}",

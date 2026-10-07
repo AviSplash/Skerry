@@ -94,6 +94,11 @@
               <button type="button" class="btn small secondary" data-action="diagnostics">Diagnostics</button>
               <button type="button" class="btn small secondary" data-action="open-logs">Open logs folder</button>
             </div>
+            <h3 class="subhead">Remove Skerry</h3>
+            <p class="small muted">Removes Skerry and everything it stored on this computer.</p>
+            <div class="button-row">
+              <button type="button" class="btn small danger" data-action="uninstall">Uninstall Skerry…</button>
+            </div>
           </div>
         </div>
       </details>
@@ -117,6 +122,23 @@
         <button type="button" class="btn secondary" data-action="open-logs">Open logs folder</button>
         <button type="button" class="btn secondary" data-action="copy-diagnostics">Copy</button>
         <button type="submit" class="btn">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="uninstall-dialog" class="dialog wide" aria-labelledby="uninstall-title">
+    <form method="dialog">
+      <h2 id="uninstall-title">Uninstall Skerry?</h2>
+      <p>Are you sure? This removes Skerry and everything it stored on this computer, then quits:</p>
+      <ul id="uninstall-items" class="uninstall-list"></ul>
+      <details class="uninstall-paths">
+        <summary>Files and folders</summary>
+        <ul id="uninstall-paths"></ul>
+      </details>
+      <div id="uninstall-notes"></div>
+      <div class="dialog-actions">
+        <button type="submit" class="btn secondary" autofocus>Cancel</button>
+        <button type="button" class="btn danger-solid" data-action="confirm-uninstall">Uninstall Skerry</button>
       </div>
     </form>
   </dialog>
