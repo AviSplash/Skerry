@@ -84,6 +84,21 @@ pub async fn backends() -> Result<(Backends, String)> {
     ))
 }
 
+/// macOS: forget Skerry's stored input permissions and ask for them again.
+/// macOS ties an approval to the exact build that was approved, so after an
+/// update it can show Skerry as allowed while still blocking it; resetting
+/// lets the running copy be approved. Elsewhere this does nothing.
+/// `bundle_id` is the app's bundle identifier.
+pub fn reset_permissions(bundle_id: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    return macos::reset_permissions(bundle_id);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bundle_id;
+        Ok(())
+    }
+}
+
 /// Process-wide setup that must happen before any window or hook is created
 /// (DPI awareness on Windows). Safe to call more than once.
 pub fn init_process() {

@@ -52,6 +52,36 @@ jobs:
         run: cargo build -p skerry-cli
       - name: Build desktop app
         run: cargo build -p skerry-app
+      - name: macOS signing keeps one identity across builds
+        if: runner.os == 'macOS'
+        run: |
+          # Same steps as a release, with a throwaway certificate.
+          d="$(mktemp -d)"
+          ossl="$(brew --prefix openssl@3 2>/dev/null)/bin/openssl"
+          [ -x "$ossl" ] || ossl=openssl
+          "$ossl" req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes -keyout "$d/key.pem" -out "$d/cert.pem" \
+            -subj "/CN=Skerry CI Test" -addext "keyUsage=critical,digitalSignature" \
+            -addext "extendedKeyUsage=critical,codeSigning" -addext "basicConstraints=critical,CA:false"
+          "$ossl" pkcs12 -export -inkey "$d/key.pem" -in "$d/cert.pem" -name "Skerry CI Test" -out "$d/test.p12" \
+            -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 -passout pass:ci-test
+          MACOS_CERTIFICATE="$(base64 < "$d/test.p12" | tr -d '\n')" MACOS_CERTIFICATE_PASSWORD=ci-test \
+            GITHUB_ENV="$d/env" .github/scripts/macos-signing.sh
+          identity="$(sed -n 's/^APPLE_SIGNING_IDENTITY=//p' "$d/env")"
+          [ -n "$identity" ] || { echo "signing was not set up"; exit 1; }
+          # Two different builds of one app must have the same designated
+          # requirement, or macOS forgets its permissions on every update.
+          cp target/debug/skerry-cli "$d/build1"
+          cp /usr/bin/true "$d/build2"
+          for b in build1 build2; do
+            codesign --force --sign "$identity" --options runtime --identifier org.skerry.app "$d/$b"
+          done
+          r1="$(codesign -d -r- "$d/build1" 2>&1 | grep designated)"
+          r2="$(codesign -d -r- "$d/build2" 2>&1 | grep designated)"
+          echo "$r1"
+          [ "$r1" = "$r2" ] || { echo "requirements differ: $r2"; exit 1; }
+          case "$r1" in *cdhash*) echo "requirement is tied to a single build"; exit 1 ;; esac
+          "$d/build2"
+          "$d/build1" --help > /dev/null
       - name: X11 backend against a real X server
         if: runner.os == 'Linux'
         run: |

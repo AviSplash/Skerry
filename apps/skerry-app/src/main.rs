@@ -160,6 +160,17 @@ fn open_permission_settings(pane: Option<String>) {
     let _ = pane;
 }
 
+/// macOS: clear the approval macOS stored for an earlier copy of Skerry and
+/// ask again, for when Skerry shows as allowed but macOS still blocks it.
+#[tauri::command]
+async fn reset_permissions(app: AppHandle) -> Result<(), String> {
+    let bundle_id = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || skerry_platform::reset_permissions(&bundle_id))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))
+}
+
 /// A report about this computer, its connections and recent log lines, for
 /// troubleshooting and bug reports.
 #[tauri::command]
@@ -541,6 +552,7 @@ fn main() {
             get_autostart,
             set_autostart,
             open_permission_settings,
+            reset_permissions,
             get_diagnostics,
             open_logs,
             firewall_status,

@@ -67,7 +67,7 @@ Coming from 1.0, install 1.1 once by hand over the old version (no need to unins
 The current builds are not code-signed (signing certificates cost money; see [Roadmap](#roadmap)), so each OS asks once before running them.
 
 - **Windows:** if SmartScreen says "Windows protected your PC", click **More info → Run anyway**. At the end of the installation, approve the administrator prompt: it adds the Windows Firewall rule that lets your other computers connect to this one. To control apps running as administrator, Skerry must also run as administrator. Windows never lets any app control UAC prompts or the lock screen.
-- **macOS:** open the `.dmg`, drag Skerry to Applications, then **right-click Skerry → Open** the first time. When asked, allow Skerry under **System Settings → Privacy & Security → Accessibility** and **Input Monitoring**, then restart Skerry. When macOS asks whether Skerry may find devices on your local network, click **Allow**.
+- **macOS:** open the `.dmg`, drag Skerry to Applications, then **right-click Skerry → Open** the first time. When asked, switch Skerry on under **System Settings → Privacy & Security → Accessibility** (and **Input Monitoring** if macOS lists it there too). When macOS asks whether Skerry may find devices on your local network, click **Allow**.
 - **Linux:** on GNOME or KDE (Wayland), approve the "Remote desktop" and "Input capture" requests the first time. Skerry remembers your answer. On X11 nothing extra is needed.
 
 ## Getting started
@@ -128,8 +128,9 @@ Start with **Settings → Advanced → Help → Diagnostics**. It shows what Ske
   2. it's placed on the side where it really is, in the **Arrangement** on either computer;
   3. you're pushing against the *outer* edge: with several monitors, that's the edge of the outermost monitor on that side;
   4. no mouse button is held (switching waits while you drag, unless you turn that off);
-  5. on a Mac, Skerry is allowed under **Accessibility** and **Input Monitoring**. After updating Skerry on a Mac, macOS can keep showing it as allowed while silently blocking it: remove it from both lists with **−**, add it again with **+**, then restart Skerry.
-- **Hotkeys do nothing.** Hotkeys only switch to computers that are online and placed in the arrangement. On a Mac they need Input Monitoring. On Windows, keys pressed while an app running as administrator has focus only reach Skerry if Skerry also runs as administrator.
+  5. on a Mac, Skerry is allowed under **Accessibility**.
+- **On a Mac, Skerry says it needs permission although it's already switched on.** macOS ties the approval to the exact copy of Skerry you approved. Builds up to 1.1.0 were signed differently every time, so after an update the switch stays on but no longer applies. Click **Reset permissions** in Skerry's banner and allow Skerry again when macOS asks. (Or in Terminal: `tccutil reset Accessibility org.skerry.app`, then reopen Skerry.) Releases signed with Skerry's own certificate (see [Releasing](#releasing)) keep the approval across later updates.
+- **Hotkeys do nothing.** Hotkeys only switch to computers that are online and placed in the arrangement. On a Mac, check Accessibility (and Input Monitoring, if Skerry is listed there). On Windows, keys pressed while an app running as administrator has focus only reach Skerry if Skerry also runs as administrator.
 - **"Could not listen on 0.0.0.0:24870".** Another program is using the port. Change `port` in the settings file.
 - **Keys stick or the mouse gets stuck on another computer.** Press Ctrl + Alt + Shift + Esc to bring it home. Skerry also releases every held key and button whenever control leaves a computer or a connection drops.
 
@@ -176,6 +177,8 @@ apps/skerry-app          desktop app (Tauri 2; the UI is plain HTML/CSS/JS in ui
 ## Releasing
 
 Run **Actions → Release → Run workflow** with a version like `v1.2`. It builds every platform, publishes the three releases, and, when the repository has the secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, signs the updates and publishes `latest.json` on the `updater` branch, which installed copies check. The public half of that key is `plugins.updater.pubkey` in `apps/skerry-app/tauri.conf.json`. Keep the private key safe: a lost key means existing installs can't verify later updates.
+
+With the secrets `MACOS_CERTIFICATE` (a base64-encoded `.p12` code-signing certificate) and `MACOS_CERTIFICATE_PASSWORD`, Mac builds are signed with that certificate instead of an ad-hoc signature. macOS remembers Accessibility approval per signing identity, so this is what lets permissions survive updates; a self-signed certificate is enough (it doesn't replace Apple notarization). Always use the same certificate.
 
 ## Contributing
 

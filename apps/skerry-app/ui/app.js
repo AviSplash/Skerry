@@ -80,11 +80,13 @@ function statusBanner(status, what) {
     unsupported: `This computer can't ${what}`,
     error: `Skerry can't ${what}`,
   }[status.state];
+  const needsInputMonitoring = (status.detail ?? "").includes("Input Monitoring");
   const action =
     status.state === "needs_permission" && state.me.os === "macos"
       ? `<div class="actions">
            <button class="btn small secondary" data-action="open-permissions" data-pane="accessibility">Accessibility</button>
-           <button class="btn small secondary" data-action="open-permissions" data-pane="input_monitoring">Input Monitoring</button>
+           ${needsInputMonitoring ? `<button class="btn small secondary" data-action="open-permissions" data-pane="input_monitoring">Input Monitoring</button>` : ""}
+           <button class="btn small" data-action="reset-permissions">Reset permissions</button>
          </div>`
       : "";
   return `<div class="banner ${kind}"><div class="text"><strong>${esc(title)}</strong>${esc(status.detail ?? "")}</div>${action}</div>`;
@@ -95,7 +97,7 @@ function updateBanner() {
   let progress = "";
   if (updateProgress === "working") progress = `<progress aria-label="Updating"></progress>`;
   else if (updateProgress !== null) progress = `<progress max="100" value="${updateProgress}" aria-label="Downloading the update"></progress>`;
-  const mac = state.me.os === "macos" ? " If Skerry stops responding to the mouse afterwards, remove it from Privacy & Security → Accessibility and add it again." : "";
+  const mac = state.me.os === "macos" ? " If macOS asks for Skerry's permissions again afterwards, click Reset permissions when Skerry shows it." : "";
   return `<div class="banner info"><div class="text"><strong>Skerry ${esc(update.version)} is available</strong>You have ${esc(state.me.version)}. Updating keeps your pairings and settings, and Skerry restarts by itself.${esc(mac)}</div>
     <div class="actions">${progress}<button class="btn small" data-action="install-update" ${updateProgress !== null ? "disabled" : ""}>${updateProgress !== null ? "Updating…" : "Update and restart"}</button></div></div>`;
 }
@@ -324,6 +326,15 @@ function onUpdateProgress({ downloaded, total }) {
   }
 }
 
+async function resetPermissions() {
+  try {
+    await api.invoke("reset_permissions");
+    toast("Permissions reset. Allow Skerry when macOS asks (or switch it on under Accessibility). If this message stays afterwards, quit and reopen Skerry.", "ok");
+  } catch (e) {
+    toast(String(e), "error");
+  }
+}
+
 async function refreshFirewall() {
   if (state?.me.os !== "windows" || Date.now() - firewallCheckedAt < 60_000) return;
   firewallCheckedAt = Date.now();
@@ -457,6 +468,7 @@ function wire() {
     else if (action === "install-update") installUpdate();
     else if (action === "check-update") checkForUpdates(true);
     else if (action === "fix-firewall") fixFirewall();
+    else if (action === "reset-permissions") resetPermissions();
     else if (action === "diagnostics") showDiagnostics();
     else if (action === "copy-diagnostics") copyDiagnostics();
     else if (action === "open-logs") call("open_logs");
@@ -521,7 +533,7 @@ main();
 function demoApi() {
   const listeners = [];
   const demo = {
-    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.1.0" },
+    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: new URLSearchParams(location.search).has("macperm") ? "macos" : "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.1.0" },
     settings: { enabled: true, clipboard_sync: true, swap_cmd_ctrl: true, edge_switching: true, block_switch_while_dragging: true, check_updates: true },
     layout: { left: "a1", right: "b2", top: null, bottom: null },
     peers: [
@@ -531,7 +543,9 @@ function demoApi() {
       { id: "d4", name: "living-room-nuc", os: "linux", paired: false, online: false, available: false, discovered: true, addr: "192.168.1.60:24870", fingerprint: null, edge: null, speed: 1, version: "1.0.0" },
     ],
     focus: new URLSearchParams(location.search).has("controlling") ? { kind: "controlling", peer: "b2" } : { kind: "local" },
-    capture: { state: "ok" },
+    capture: new URLSearchParams(location.search).has("macperm")
+      ? { state: "needs_permission", detail: "Switch Skerry on in System Settings → Privacy & Security → Accessibility. If it's already switched on there, macOS is remembering an older copy of Skerry: click Reset permissions, then allow Skerry again when macOS asks." }
+      : { state: "ok" },
     emulation: { state: "ok" },
     pairings: [],
     hotkeys: [
@@ -562,7 +576,7 @@ function demoApi() {
         case "install_update": throw "Updates can't be installed in the demo.";
         case "firewall_status": return "n/a";
         case "get_diagnostics": return "Skerry 1.1.0 on linux x86_64 (input: Demo)\nThis computer: Studio Desktop\n";
-        case "open_logs": case "open_permission_settings": case "fix_firewall": return null;
+        case "open_logs": case "open_permission_settings": case "fix_firewall": case "reset_permissions": return null;
         case "get_autostart": return true;
         case "update_settings":
           for (const [k, v] of Object.entries(args.settings)) k === "name" ? (demo.me.name = v) : (demo.settings[k] = v);

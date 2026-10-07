@@ -4089,7 +4089,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skerry-app"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -4109,7 +4109,7 @@ dependencies = [
 
 [[package]]
 name = "skerry-cli"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4122,7 +4122,7 @@ dependencies = [
 
 [[package]]
 name = "skerry-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "directories",
@@ -4148,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "skerry-platform"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "arboard",

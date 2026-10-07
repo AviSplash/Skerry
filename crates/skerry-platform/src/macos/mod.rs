@@ -44,9 +44,6 @@ type Parts = (Box<dyn Capture>, Box<dyn Emulation>, Box<dyn ScreenSource>, Strin
 /// Marks events posted by Skerry ("SKRY").
 const MAGIC: i64 = 0x534b_5259;
 
-const PERMISSION_HINT: &str = "Allow Skerry in System Settings → Privacy & Security → Accessibility and \
-     Input Monitoring, then quit and reopen Skerry. After an update, remove Skerry from those lists and add it again.";
-
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
@@ -62,9 +59,49 @@ extern "C" {
     fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
 }
 
-/// Ask for Input Monitoring (needed to see keystrokes) if not yet granted.
+/// Ask for Input Monitoring if not yet granted. Skerry's event tap only
+/// strictly needs Accessibility, so this is never treated as required; it
+/// covers macOS versions that also filter keystrokes without it.
 fn request_input_monitoring() -> bool {
     unsafe { CGPreflightListenEventAccess() || CGRequestListenEventAccess() }
+}
+
+/// What to tell the user when macOS withholds input access. Names the lists
+/// macOS reports as missing, and covers the confusing case where Skerry
+/// already looks switched on: macOS ties the approval to the exact build
+/// that was approved, so after an update (of an ad-hoc signed build) the
+/// switch stays on but no longer applies.
+fn permission_hint() -> String {
+    let mut lists = vec!["Accessibility"];
+    if !unsafe { CGPreflightListenEventAccess() } {
+        lists.push("Input Monitoring");
+    }
+    format!(
+        "Switch Skerry on in System Settings → Privacy & Security → {}. If it's already switched on there, \
+         macOS is remembering an older copy of Skerry: click Reset permissions, then allow Skerry again \
+         when macOS asks.",
+        lists.join(" and ")
+    )
+}
+
+/// Forget the input permissions macOS has stored for Skerry and ask again,
+/// so the running copy gets approved. Fixes Skerry showing as allowed in
+/// System Settings while macOS still blocks it.
+pub fn reset_permissions(bundle_id: &str) -> Result<()> {
+    for service in ["Accessibility", "ListenEvent"] {
+        let out = std::process::Command::new("/usr/bin/tccutil").args(["reset", service, bundle_id]).output()?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if service == "Accessibility" {
+                anyhow::bail!("macOS refused to reset the Accessibility permission: {err}");
+            }
+            tracing::info!("tccutil reset {service}: {err}");
+        }
+    }
+    tracing::info!("reset macOS input permissions; asking again");
+    accessibility_trusted(true);
+    request_input_monitoring();
+    Ok(())
 }
 
 /// Is any mouse button physically down? (Combined session state.)
@@ -170,8 +207,7 @@ pub struct MacCapture {
 impl MacCapture {
     fn new(tx: CaptureSender) -> MacCapture {
         let trusted = accessibility_trusted(true);
-        let listening = request_input_monitoring();
-        let trusted = trusted && listening;
+        request_input_monitoring();
         let shared = Arc::new(Shared {
             tx,
             edges: AtomicU8::new(0),
@@ -186,7 +222,7 @@ impl MacCapture {
             status: Mutex::new(if trusted {
                 BackendStatus::Ok
             } else {
-                BackendStatus::NeedsPermission(PERMISSION_HINT.into())
+                BackendStatus::NeedsPermission(permission_hint())
             }),
         });
         allow_background_cursor_hiding();
@@ -237,7 +273,7 @@ fn tap_thread(s: Arc<Shared>) {
             Ok(t) => t,
             Err(()) => {
                 // Not yet allowed; ask again later without prompting.
-                set_status(&s, BackendStatus::NeedsPermission(PERMISSION_HINT.into()));
+                set_status(&s, BackendStatus::NeedsPermission(permission_hint()));
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
             }
@@ -621,7 +657,7 @@ impl Emulation for MacEmulation {
         if accessibility_trusted(false) {
             BackendStatus::Ok
         } else {
-            BackendStatus::NeedsPermission(PERMISSION_HINT.into())
+            BackendStatus::NeedsPermission(permission_hint())
         }
     }
 }

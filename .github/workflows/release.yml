@@ -15,6 +15,12 @@ name: Release
 # built, latest.json on the `updater` branch is replaced. Installed copies of
 # Skerry read that file to find and verify new versions. Without the secrets
 # the releases are published as usual and installed copies are not told.
+#
+# macOS signing: with the secrets MACOS_CERTIFICATE (base64 .p12) and
+# MACOS_CERTIFICATE_PASSWORD, every Mac build is signed with that certificate,
+# so macOS keeps Skerry's Accessibility and Input Monitoring permissions across
+# updates (see .github/scripts/macos-signing.sh). Without them, builds are
+# ad-hoc signed and users must re-allow Skerry after each update.
 on:
   workflow_dispatch:
     inputs:
@@ -89,6 +95,12 @@ jobs:
             console.log(`version ${v}, updater signing ${c.bundle.createUpdaterArtifacts ? "on" : "off (no TAURI_SIGNING_PRIVATE_KEY secret)"}`);
           '
           grep -m1 '^version' Cargo.toml
+      - name: Set up macOS code signing
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: .github/scripts/macos-signing.sh
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
         with:
@@ -130,8 +142,10 @@ jobs:
               macos)
                 echo "1. Download the \`.dmg\` below (one file for both Apple Silicon and Intel Macs) and drag Skerry to Applications."
                 echo "2. The first time, **right-click Skerry → Open** (this build isn't code-signed yet)."
-                echo "3. Allow Skerry in **System Settings → Privacy & Security → Accessibility** and **Input Monitoring**, then quit and reopen it."
+                echo "3. Switch Skerry on in **System Settings → Privacy & Security → Accessibility** (and **Input Monitoring** if it's listed there)."
                 echo "4. When macOS asks whether Skerry may find devices on your local network, click **Allow**."
+                echo
+                echo "If Skerry says it needs permission although it's already switched on (common after updating from 1.1.0 or earlier), click **Reset permissions** in Skerry's banner and allow it again when macOS asks."
                 echo
                 echo "If macOS says the app is damaged, run \`xattr -dr com.apple.quarantine /Applications/Skerry.app\` in Terminal."
                 ;;
