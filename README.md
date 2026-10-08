@@ -50,9 +50,9 @@ Download the installer for each computer from its release:
 
 | OS | Release | File |
 |---|---|---|
-| Windows | [v1.1 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1-windows) | `Skerry_1.1.0_x64-setup.exe` or `.msi` |
-| macOS | [v1.1 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1-macos) | `Skerry_1.1.0_universal.dmg` (Apple Silicon and Intel) |
-| Linux | [v1.1 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
+| Windows | [v1.1.3 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.3-windows) | `Skerry_1.1.3_x64-setup.exe` or `.msi` |
+| macOS | [v1.1.3 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.3-macos) | `Skerry_1.1.3_universal.dmg` (Apple Silicon and Intel) |
+| Linux | [v1.1.3 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.3-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
 
 Install Skerry on **every** computer you want to share between. Use the same version everywhere.
 
@@ -67,7 +67,7 @@ Coming from 1.0, install 1.1 once by hand over the old version (no need to unins
 The current builds are not code-signed (signing certificates cost money; see [Roadmap](#roadmap)), so each OS asks once before running them.
 
 - **Windows:** if SmartScreen says "Windows protected your PC", click **More info → Run anyway**. At the end of the installation, approve the administrator prompt: it adds the Windows Firewall rule that lets your other computers connect to this one. To control apps running as administrator, Skerry must also run as administrator. Windows never lets any app control UAC prompts or the lock screen.
-- **macOS:** open the `.dmg`, drag Skerry to Applications, eject the disk image, and open Skerry from Applications (macOS doesn't keep the permissions of a copy running from the disk image). The first time, macOS asks before opening it: on macOS 15 or later, click **Done**, then **System Settings → Privacy & Security → Open Anyway**; on macOS 12 to 14, **right-click Skerry → Open**. When asked, switch Skerry on under **System Settings → Privacy & Security → Accessibility** (and **Input Monitoring** if macOS lists it there too). On macOS 15 or later, when macOS asks whether Skerry may find devices on your local network, click **Allow**.
+- **macOS:** open the `.dmg`, drag Skerry to Applications, eject the disk image, and open Skerry from Applications (macOS doesn't keep the permissions of a copy running from the disk image). The first time, macOS asks before opening it: on macOS 15 or later, click **Done**, then **System Settings → Privacy & Security → Open Anyway**; on macOS 12 to 14, **right-click Skerry → Open**. When asked, switch Skerry on under **System Settings → Privacy & Security → Accessibility** (and **Input Monitoring** if macOS lists it there too). On macOS 15 or later, when macOS asks whether Skerry may find devices on your local network, click **Allow**. Details and fixes: [Skerry on macOS](docs/macos.md).
 - **Linux:** on GNOME or KDE (Wayland), approve the "Remote desktop" and "Input capture" requests the first time. Skerry remembers your answer. On X11 nothing extra is needed.
 
 ### Uninstalling
@@ -105,7 +105,7 @@ On a Mac, Alt is the Option key. You can change hotkeys in the settings file (sh
 
 ```text
 $ skerry-cli run
-Skerry 1.1.0 on studio (X11)
+Skerry 1.1.3 on studio (X11)
 device id 1c843bbbadba346f  fingerprint 1c84-3bbb-adba-346f-1f47  port 24870
 Type `help` for commands.
 > devices
@@ -149,6 +149,7 @@ Start with **Settings → Advanced → Help → Diagnostics**. It shows what Ske
   - **After an update**, a Mac build without Skerry's own certificate is a new app to macOS. Skerry notices and clears the old entry itself, so macOS asks once and you allow Skerry again. If the switch still shows on but Skerry says it needs permission, click **Reset permissions** in Skerry's banner (or in Terminal: `tccutil reset Accessibility org.skerry.app`, then reopen Skerry). Releases signed with Skerry's own certificate (see [Releasing](#releasing)) keep the approval across updates.
   - Run Skerry from **Applications**, not from the disk image or the Downloads folder: macOS can't keep the permissions of those copies.
   - **Settings → Advanced → Help → Diagnostics** shows how this copy is signed and whether macOS currently allows it.
+  - Step by step, with the Local Network fixes too: [Skerry on macOS](docs/macos.md).
 - **Hotkeys do nothing.** Hotkeys only switch to computers that are online and placed in the arrangement. On a Mac, check Accessibility (and Input Monitoring, if Skerry is listed there). On Windows, keys pressed while an app running as administrator has focus only reach Skerry if Skerry also runs as administrator.
 - **"Could not listen on 0.0.0.0:24870".** Another program is using the port. Change `port` in the settings file.
 - **Keys stick or the mouse gets stuck on another computer.** Press Ctrl + Alt + Shift + Esc to bring it home. Skerry also releases every held key and button whenever control leaves a computer or a connection drops.
@@ -201,6 +202,8 @@ macOS remembers Accessibility, Input Monitoring and Local Network approval per s
 
 - **Free, self-signed:** run `.github/scripts/make-macos-certificate.sh` once (macOS, Linux or Git Bash; it needs `openssl`) and add the two values it prints as the repository secrets `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD`. Accessibility and Input Monitoring then survive updates. Gatekeeper still asks once on first launch, and Apple only promises reliable Local Network tracking for Apple-issued certificates.
 - **Apple Developer ID** (Apple Developer Program): export your *Developer ID Application* certificate as a `.p12` and use it for the same two secrets. Add `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID` to have Apple notarize each build, so Skerry opens without any Gatekeeper warning.
+
+Step-by-step instructions for both: [Skerry on macOS → For maintainers](docs/macos.md#for-maintainers-signing-releases).
 
 ## Contributing
 
