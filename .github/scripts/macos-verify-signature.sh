@@ -19,7 +19,7 @@ expected="$2"
 codesign --verify --deep --strict --verbose=2 "$app"
 info="$(codesign --display --verbose=2 "$app" 2>&1)"
 printf '%s\n' "$info"
-requirement="$(codesign --display --requirements - "$app" 2>&1 | sed -n 's/^designated => //p')"
+requirement="$(codesign --display --requirements - "$app" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p')"
 echo "Designated requirement: $requirement"
 
 identifier="$(printf '%s\n' "$info" | sed -n 's/^Identifier=//p')"
