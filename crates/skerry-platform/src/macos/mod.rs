@@ -35,6 +35,7 @@ use skerry_core::keys::{code as k, Hotkey, HotkeyAction, HotkeyMatcher, KeyVerdi
 use skerry_core::proto::Button;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -76,18 +77,50 @@ fn permission_hint() -> String {
     if !unsafe { CGPreflightListenEventAccess() } {
         lists.push("Input Monitoring");
     }
+    let lists = lists.join(" and ");
+    if let Some(problem) = location_problem() {
+        return format!("{problem} Then switch Skerry on in System Settings → Privacy & Security → {lists}.");
+    }
     format!(
-        "Switch Skerry on in System Settings → Privacy & Security → {}. If it's already switched on there, \
+        "Switch Skerry on in System Settings → Privacy & Security → {lists}. If it's already switched on there, \
          macOS is remembering an older copy of Skerry: click Reset permissions, then allow Skerry again \
-         when macOS asks.",
-        lists.join(" and ")
+         when macOS asks."
     )
 }
 
-/// Forget the input permissions macOS has stored for Skerry and ask again,
-/// so the running copy gets approved. Fixes Skerry showing as allowed in
-/// System Settings while macOS still blocks it.
-pub fn reset_permissions(bundle_id: &str) -> Result<()> {
+/// The Skerry.app this program runs from, if it runs from an app bundle.
+fn app_bundle() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    // …/Skerry.app/Contents/MacOS/skerry
+    let bundle = exe.ancestors().nth(3)?;
+    bundle.extension().is_some_and(|e| e == "app").then(|| bundle.to_path_buf())
+}
+
+/// Why macOS can't keep Skerry's permissions because of where it runs
+/// from: a disk image, or a temporary copy macOS makes of a downloaded app
+/// that wasn't moved to Applications (App Translocation, a new path on every
+/// launch). `None` when the location is fine.
+fn location_problem() -> Option<&'static str> {
+    let bundle = app_bundle()?;
+    let path = bundle.to_string_lossy();
+    if path.contains("/AppTranslocation/") {
+        Some(
+            "macOS is running Skerry from a temporary copy, so it can't keep Skerry's permissions. Quit Skerry, \
+             drag it into Applications, and open it from there.",
+        )
+    } else if path.starts_with("/Volumes/") {
+        Some(
+            "Skerry is running from the disk image (or another drive), so macOS may not keep its permissions. \
+             Quit Skerry, drag it into Applications, eject the disk image, and open Skerry from Applications.",
+        )
+    } else {
+        None
+    }
+}
+
+/// Clear the Accessibility and Input Monitoring entries macOS stored for
+/// `bundle_id`.
+fn reset_entries(bundle_id: &str) -> Result<()> {
     for service in ["Accessibility", "ListenEvent"] {
         let out = std::process::Command::new("/usr/bin/tccutil").args(["reset", service, bundle_id]).output()?;
         if !out.status.success() {
@@ -98,10 +131,115 @@ pub fn reset_permissions(bundle_id: &str) -> Result<()> {
             tracing::info!("tccutil reset {service}: {err}");
         }
     }
+    Ok(())
+}
+
+/// Forget the input permissions macOS has stored for Skerry and ask again,
+/// so the running copy gets approved. Fixes Skerry showing as allowed in
+/// System Settings while macOS still blocks it.
+pub fn reset_permissions(bundle_id: &str) -> Result<()> {
+    reset_entries(bundle_id)?;
     tracing::info!("reset macOS input permissions; asking again");
     accessibility_trusted(true);
     request_input_monitoring();
     Ok(())
+}
+
+/// Identifies this copy of the program: its path, size and modification
+/// time, which change whenever Skerry is installed or updated.
+fn build_stamp() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let meta = std::fs::metadata(&exe).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some(format!("{}\n{}\n{modified}\n", exe.display(), meta.len()))
+}
+
+/// When this copy of Skerry isn't allowed to use input yet, clear the
+/// Accessibility and Input Monitoring entries left by earlier copies, so
+/// macOS asks about this one. Done once per installed copy (`marker`
+/// remembers which), so someone who declines isn't asked again and again.
+///
+/// macOS ties each approval to the exact app it was given to. An update of
+/// an ad-hoc signed build is a different app, so System Settings keeps
+/// showing Skerry switched on while macOS refuses the new copy, and
+/// switching it off and on there doesn't help.
+pub fn forget_stale_permissions(bundle_id: &str, marker: &Path) {
+    if accessibility_trusted(false) || app_bundle().is_none() || location_problem().is_some() {
+        return;
+    }
+    let Some(stamp) = build_stamp() else { return };
+    if std::fs::read_to_string(marker).is_ok_and(|s| s == stamp) {
+        return;
+    }
+    match reset_entries(bundle_id) {
+        Ok(()) => tracing::info!("cleared permission entries left by an earlier copy of Skerry"),
+        Err(e) => tracing::warn!("couldn't clear old permission entries: {e:#}"),
+    }
+    if let Err(e) = std::fs::write(marker, stamp) {
+        tracing::warn!("couldn't write {}: {e}", marker.display());
+    }
+}
+
+/// Lines for the diagnostics report: how this copy of Skerry is signed,
+/// where it runs from, and what macOS currently allows it.
+pub fn diagnostics() -> Vec<String> {
+    let mut lines = Vec::new();
+    match app_bundle() {
+        Some(bundle) => {
+            lines.push(format!("App: {} ({})", bundle.display(), signature_summary(&bundle)));
+            if let Some(problem) = location_problem() {
+                lines.push(format!("App location: {problem}"));
+            }
+        }
+        None => lines.push("App: not running from an app bundle".into()),
+    }
+    let allowed = |ok: bool| if ok { "allowed" } else { "not allowed" };
+    lines.push(format!(
+        "Accessibility: {}, Input Monitoring: {}",
+        allowed(accessibility_trusted(false)),
+        allowed(unsafe { CGPreflightListenEventAccess() })
+    ));
+    lines
+}
+
+/// How the app bundle is signed, as macOS's `codesign` reports it.
+fn signature_summary(bundle: &Path) -> String {
+    let out =
+        match std::process::Command::new("/usr/bin/codesign").args(["--display", "--verbose=2"]).arg(bundle).output() {
+            Ok(o) => o,
+            Err(e) => return format!("couldn't check the signature: {e}"),
+        };
+    // codesign writes the details to stderr.
+    let text = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        return format!("not signed: {}", text.trim());
+    }
+    describe_signature(&text)
+}
+
+/// Summarise `codesign --display --verbose=2` output.
+fn describe_signature(text: &str) -> String {
+    let field =
+        |name: &str| text.lines().find_map(|l| l.strip_prefix(name).and_then(|v| v.strip_prefix('='))).map(str::trim);
+    let identifier = field("Identifier").unwrap_or("unknown");
+    let flags = text.lines().find_map(|l| l.split_once("flags=").map(|(_, f)| f)).unwrap_or("");
+    let sealed = text.lines().any(|l| l.starts_with("Sealed Resources version"));
+    if flags.contains("linker-signed") || !sealed {
+        return format!(
+            "only the program is signed, as {identifier}: macOS can't recognise this copy as Skerry, so it \
+             never applies its permissions. Install the latest Skerry"
+        );
+    }
+    match field("Authority") {
+        Some(authority) => {
+            let team = field("TeamIdentifier").filter(|t| *t != "not set");
+            match team {
+                Some(team) => format!("signed as {identifier} by {authority}, team {team}"),
+                None => format!("signed as {identifier} by {authority}"),
+            }
+        }
+        None => format!("signed as {identifier}, ad-hoc: macOS asks for permissions again after updates"),
+    }
 }
 
 /// Is any mouse button physically down? (Combined session state.)
@@ -667,5 +805,38 @@ fn other_number(b: Button) -> i64 {
         Button::Back => 3,
         Button::Forward => 4,
         _ => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_signature;
+
+    #[test]
+    fn signature_descriptions() {
+        let linker = "Executable=/Applications/Skerry.app/Contents/MacOS/skerry\nIdentifier=skerry-5f1c2a\n\
+                      Format=app bundle with Mach-O universal (x86_64 arm64)\n\
+                      CodeDirectory v=20400 size=9000 flags=0x20002(adhoc,linker-signed) hashes=278+0 location=embedded\n\
+                      Signature=adhoc\nInfo.plist=not bound\nTeamIdentifier=not set\nSealed Resources=none\n";
+        assert!(describe_signature(linker).contains("only the program is signed, as skerry-5f1c2a"));
+
+        let adhoc = "Identifier=org.skerry.app\nFormat=app bundle with Mach-O universal (x86_64 arm64)\n\
+                     CodeDirectory v=20500 size=9000 flags=0x10002(adhoc,runtime) hashes=278+7 location=embedded\n\
+                     Signature=adhoc\nTeamIdentifier=not set\nSealed Resources version=2 rules=13 files=4\n";
+        assert!(describe_signature(adhoc).starts_with("signed as org.skerry.app, ad-hoc"));
+
+        let own = "Identifier=org.skerry.app\nCodeDirectory v=20500 size=9000 flags=0x10000(runtime) hashes=278+7\n\
+                   Signature size=1678\nAuthority=Skerry Code Signing\nTeamIdentifier=not set\n\
+                   Sealed Resources version=2 rules=13 files=4\n";
+        assert_eq!(describe_signature(own), "signed as org.skerry.app by Skerry Code Signing");
+
+        let apple = "Identifier=org.skerry.app\nCodeDirectory v=20500 size=9000 flags=0x10000(runtime) hashes=278+7\n\
+                     Authority=Developer ID Application: Example (AB12CD34EF)\nAuthority=Developer ID Certification \
+                     Authority\nAuthority=Apple Root CA\nTeamIdentifier=AB12CD34EF\n\
+                     Sealed Resources version=2 rules=13 files=4\n";
+        assert_eq!(
+            describe_signature(apple),
+            "signed as org.skerry.app by Developer ID Application: Example (AB12CD34EF), team AB12CD34EF"
+        );
     }
 }

@@ -20,13 +20,11 @@ fn status(s: &BackendStatus) -> String {
 pub fn report(s: &Snapshot, backend: &str, log_dir: &Path) -> String {
     let mut r = String::new();
     let name = |id: &str| s.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| id.into());
-    let _ = writeln!(
-        r,
-        "Skerry {} on {} {} (input: {backend})",
-        s.me.version,
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
+    let os = match skerry_core::net::macos_version() {
+        Some(v) => format!("macOS {v}"),
+        None => std::env::consts::OS.to_string(),
+    };
+    let _ = writeln!(r, "Skerry {} on {os} {} (input: {backend})", s.me.version, std::env::consts::ARCH);
     let _ =
         writeln!(r, "This computer: {} ({:?}), id {}, fingerprint {}", s.me.name, s.me.os, s.me.id, s.me.fingerprint);
     match &s.listen_error {
@@ -36,6 +34,9 @@ pub fn report(s: &Snapshot, backend: &str, log_dir: &Path) -> String {
         None => {
             let _ = writeln!(r, "Listening: port {}", s.me.port);
         }
+    }
+    for line in skerry_platform::diagnostics() {
+        let _ = writeln!(r, "{line}");
     }
     let _ = writeln!(r, "Capture (control others): {}", status(&s.capture));
     let _ = writeln!(r, "Emulation (be controlled): {}", status(&s.emulation));
