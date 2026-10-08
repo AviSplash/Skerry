@@ -19,8 +19,12 @@ name: Release
 # macOS signing: with the secrets MACOS_CERTIFICATE (base64 .p12) and
 # MACOS_CERTIFICATE_PASSWORD, every Mac build is signed with that certificate,
 # so macOS keeps Skerry's Accessibility and Input Monitoring permissions across
-# updates (see .github/scripts/macos-signing.sh). Without them, builds are
-# ad-hoc signed and users must re-allow Skerry after each update.
+# updates. Create a free self-signed one with
+# .github/scripts/make-macos-certificate.sh, or use an Apple Developer ID
+# certificate and add APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID to notarize
+# (see .github/scripts/macos-signing.sh). Without a certificate, builds are
+# ad-hoc signed and users must re-allow Skerry after each update. Either way
+# the build fails unless the whole app is signed as org.skerry.app.
 on:
   workflow_dispatch:
     inputs:
@@ -100,6 +104,9 @@ jobs:
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: .github/scripts/macos-signing.sh
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
@@ -107,6 +114,9 @@ jobs:
           projectPath: apps/skerry-app
           tauriScript: npx --yes @tauri-apps/cli@2
           args: ${{ matrix.args }}
+      - name: Check the macOS app signature
+        if: runner.os == 'macOS'
+        run: .github/scripts/macos-verify-signature.sh target/universal-apple-darwin/release/bundle/macos/Skerry.app org.skerry.app
       - name: Collect release files
         id: collect
         shell: bash
@@ -140,12 +150,12 @@ jobs:
                 echo "3. Approve the administrator prompt at the end of the installation: it adds the Windows Firewall rule that lets your other computers connect to this one. If you skip it, Skerry shows an **Allow Skerry** button later."
                 ;;
               macos)
-                echo "1. Download the \`.dmg\` below (one file for both Apple Silicon and Intel Macs) and drag Skerry to Applications."
-                echo "2. The first time, **right-click Skerry → Open** (this build isn't code-signed yet)."
+                echo "1. Download the \`.dmg\` below (one file for both Apple Silicon and Intel Macs), drag Skerry to Applications, eject the disk image, and open Skerry from Applications."
+                echo "2. The first time, macOS asks before opening it (this build isn't notarized by Apple). On macOS 15 or later, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. On macOS 12 to 14, **right-click Skerry → Open**."
                 echo "3. Switch Skerry on in **System Settings → Privacy & Security → Accessibility** (and **Input Monitoring** if it's listed there)."
-                echo "4. When macOS asks whether Skerry may find devices on your local network, click **Allow**."
+                echo "4. When macOS asks whether Skerry may find devices on your local network, click **Allow** (macOS 15 or later)."
                 echo
-                echo "If Skerry says it needs permission although it's already switched on (common after updating from 1.1.0 or earlier), click **Reset permissions** in Skerry's banner and allow it again when macOS asks."
+                echo "**Updating from 1.1.2 or earlier?** Those Mac builds weren't signed as a whole app, so macOS never applied the permissions you gave them, however often you switched them on. Quit Skerry, remove every Skerry entry under **Accessibility** and **Input Monitoring** with the **−** button, then open this version and allow it again. If Skerry still can't connect to other computers, switch it off and on under **Local Network**."
                 echo
                 echo "If macOS says the app is damaged, run \`xattr -dr com.apple.quarantine /Applications/Skerry.app\` in Terminal."
                 ;;

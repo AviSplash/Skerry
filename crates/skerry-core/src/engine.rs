@@ -46,6 +46,10 @@ const MANUAL_RETRY: Duration = Duration::from_secs(15);
 const PAIR_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 const PAIR_FAILURE_LIMIT: usize = 5;
 const SCAN_CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
+/// How long pairing keeps retrying while macOS may be asking about Local
+/// Network access, and how often.
+const LOCAL_NETWORK_WAIT: Duration = Duration::from_secs(20);
+const LOCAL_NETWORK_RETRY: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -750,6 +754,14 @@ impl Engine {
         let private = self.identity.private;
         let hello = self.hello.read().unwrap().clone();
         let tx = self.internal_tx.clone();
+        let os = self.os;
+        // macOS may refuse the first connections while it asks the user about
+        // Local Network access (Apple TN3179), so when the user is pairing,
+        // keep trying for a while instead of failing at once.
+        let lan_wait = match intent {
+            Intent::Pair(_) if net::local_network_privacy(os) => LOCAL_NETWORK_WAIT,
+            _ => Duration::ZERO,
+        };
         tokio::spawn(async move {
             let result = async {
                 let addrs = tokio::task::spawn_blocking(move || {
@@ -767,7 +779,15 @@ impl Engine {
                     }
                 })
                 .await??;
-                let (stream, _) = net::connect_any(addrs).await?;
+                let give_up = Instant::now() + lan_wait;
+                let (stream, _) = loop {
+                    match net::connect_any(addrs.clone()).await {
+                        Err(e) if Instant::now() < give_up && net::blocked_by_local_network(&format!("{e:#}"), os) => {
+                            tokio::time::sleep(LOCAL_NETWORK_RETRY).await;
+                        }
+                        result => break result?,
+                    }
+                };
                 establish(stream, &private, true, hello).await
             };
             match result.await {

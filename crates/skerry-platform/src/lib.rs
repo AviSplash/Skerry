@@ -99,6 +99,28 @@ pub fn reset_permissions(bundle_id: &str) -> Result<()> {
     }
 }
 
+/// macOS: when this copy of Skerry isn't allowed to use input yet, clear the
+/// permission entries earlier copies left behind, so macOS asks about this
+/// one instead of showing a switch that no longer applies. Done once per
+/// installed copy; `marker` is a file that remembers which copy was handled.
+/// Elsewhere this does nothing.
+pub fn forget_stale_permissions(bundle_id: &str, marker: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    macos::forget_stale_permissions(bundle_id, marker);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (bundle_id, marker);
+}
+
+/// Extra lines for the diagnostics report. On macOS: how this copy of the
+/// app is signed, where it runs from and which input permissions macOS
+/// grants it. Empty elsewhere.
+pub fn diagnostics() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    return macos::diagnostics();
+    #[cfg(not(target_os = "macos"))]
+    Vec::new()
+}
+
 /// Process-wide setup that must happen before any window or hook is created
 /// (DPI awareness on Windows). Safe to call more than once.
 pub fn init_process() {

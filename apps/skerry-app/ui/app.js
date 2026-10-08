@@ -97,7 +97,7 @@ function updateBanner() {
   let progress = "";
   if (updateProgress === "working") progress = `<progress aria-label="Updating"></progress>`;
   else if (updateProgress !== null) progress = `<progress max="100" value="${updateProgress}" aria-label="Downloading the update"></progress>`;
-  const mac = state.me.os === "macos" ? " If macOS asks for Skerry's permissions again afterwards, click Reset permissions when Skerry shows it." : "";
+  const mac = state.me.os === "macos" ? " If macOS asks for Skerry's permissions again afterwards, allow Skerry again." : "";
   return `<div class="banner info"><div class="text"><strong>Skerry ${esc(update.version)} is available</strong>You have ${esc(state.me.version)}. Updating keeps your pairings and settings, and Skerry restarts by itself.${esc(mac)}</div>
     <div class="actions">${progress}<button class="btn small" data-action="install-update" ${updateProgress !== null ? "disabled" : ""}>${updateProgress !== null ? "Updating…" : "Update and restart"}</button></div></div>`;
 }

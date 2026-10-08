@@ -136,9 +136,48 @@ pub fn sweep_hosts(local: &[LocalNet]) -> Vec<Ipv4Addr> {
     out
 }
 
+/// This Mac's macOS version, e.g. "15.3.1". `None` on other systems.
+pub fn macos_version() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        static VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        VERSION
+            .get_or_init(|| {
+                let out = std::process::Command::new("/usr/bin/sw_vers").arg("-productVersion").output().ok()?;
+                let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                (out.status.success() && !v.is_empty()).then_some(v)
+            })
+            .clone()
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// Whether macOS's Local Network privacy can block this computer's
+/// outgoing connections: macOS 15 and later. Assumed when the version is
+/// unknown.
+pub fn local_network_privacy(local_os: crate::keys::OsKind) -> bool {
+    let major = || macos_version()?.split('.').next()?.parse::<u32>().ok();
+    local_os == crate::keys::OsKind::Macos && major().is_none_or(|v| v >= 15)
+}
+
+/// Whether a connection error is how macOS reports that Local Network
+/// privacy blocked it ("No route to host").
+pub fn blocked_by_local_network(raw: &str, local_os: crate::keys::OsKind) -> bool {
+    let e = raw.to_ascii_lowercase();
+    local_network_privacy(local_os) && (e.contains("no route to host") || e.contains("os error 65"))
+}
+
 /// Plain-language explanation of a connection error, with what to check.
 pub fn friendly_error(raw: &str, local_os: crate::keys::OsKind) -> String {
     let e = raw.to_ascii_lowercase();
+    if blocked_by_local_network(raw, local_os) {
+        return "macOS blocked the connection. Switch Skerry on in System Settings → Privacy & Security → Local \
+                Network (if it's already on, switch it off and on again). Until then, connect from the other \
+                computer instead: it can still reach this Mac (to pair, click Scan network there, then Pair). If \
+                that's not it, check that the other computer is on and still has this address."
+            .into();
+    }
     if e.contains("timed out") {
         "Couldn't reach it (no answer). Make sure Skerry is running on that computer and that its firewall allows \
          Skerry (Windows: Settings → Windows Security → Firewall → Allow an app)."
@@ -146,14 +185,7 @@ pub fn friendly_error(raw: &str, local_os: crate::keys::OsKind) -> String {
     } else if e.contains("refused") {
         "Connection refused: Skerry isn't running on that computer, or it uses a different port.".into()
     } else if e.contains("no route to host") || e.contains("os error 65") {
-        if local_os == crate::keys::OsKind::Macos {
-            "macOS blocked the connection. Switch Skerry on in System Settings → Privacy & Security → Local Network \
-             (if it's already on, switch it off and on again). If that's not it, check that the other computer is \
-             on and still has this address, then click Scan network."
-                .into()
-        } else {
-            "No route to that computer. Check that both computers are on the same network.".into()
-        }
+        "No route to that computer. Check that both computers are on the same network and that it's still on.".into()
     } else if e.contains("network is unreachable") || e.contains("host is unreachable") {
         "That computer isn't reachable from this network. Check that both are on the same network.".into()
     } else if e.contains("no usable network address") || e.contains("cannot resolve") {
@@ -217,6 +249,13 @@ mod tests {
         use crate::keys::OsKind;
         assert!(friendly_error("timed out connecting to 1.2.3.4:24870", OsKind::Linux).contains("firewall"));
         assert!(friendly_error("No route to host (os error 65)", OsKind::Macos).contains("Local Network"));
+        assert!(!friendly_error("No route to host (os error 113)", OsKind::Linux).contains("Local Network"));
+        assert!(blocked_by_local_network(
+            "connecting to 10.0.0.2:24870: No route to host (os error 65)",
+            OsKind::Macos
+        ));
+        assert!(!blocked_by_local_network("timed out connecting to 10.0.0.2:24870", OsKind::Macos));
+        assert!(!blocked_by_local_network("No route to host (os error 113)", OsKind::Linux));
         assert!(friendly_error("Connection refused (os error 111)", OsKind::Linux).contains("isn't running"));
     }
 }

@@ -451,6 +451,12 @@ fn main() {
         .setup(move |app| {
             let config_path = paths.config.display().to_string();
             let config_dir = paths.dir.clone();
+            // macOS: before asking for input permissions, drop entries an
+            // earlier copy of Skerry left that don't apply to this one.
+            skerry_platform::forget_stale_permissions(
+                &app.config().identifier,
+                &config_dir.join("macos-permissions-checked"),
+            );
             let (engine, backend) = tauri::async_runtime::block_on(async move {
                 let (backends, backend) = match skerry_platform::backends().await {
                     Ok(b) => b,
