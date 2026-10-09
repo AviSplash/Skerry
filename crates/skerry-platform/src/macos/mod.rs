@@ -332,11 +332,6 @@ fn warp_cursor(x: f64, y: f64) {
     let _ = CGDisplay::warp_mouse_cursor_position(CGPoint::new(x, y));
 }
 
-fn main_display_center() -> (f64, f64) {
-    let b = CGDisplay::main().bounds();
-    ((b.origin.x + b.size.width / 2.0).round(), (b.origin.y + b.size.height / 2.0).round())
-}
-
 pub fn displays() -> Vec<Rect> {
     CGDisplay::active_displays()
         .unwrap_or_default()
@@ -371,7 +366,7 @@ struct Shared {
     grabbed: AtomicBool,
     cursor_hidden: AtomicBool,
     /// Where the hidden cursor is kept while capturing.
-    park: Mutex<(f64, f64)>,
+    park: Mutex<Park>,
     buttons: AtomicU8,
     desktop: RwLock<Desktop>,
     hotkeys: Mutex<HotkeyMatcher>,
@@ -382,6 +377,26 @@ struct Shared {
     commands: Mutex<Vec<Command>>,
     /// Wakes the tap thread for `commands`, once its run loop is running.
     waker: OnceLock<Waker>,
+}
+
+/// Where the hidden cursor waits while capturing, and the largest movement
+/// accepted from it in one event.
+#[derive(Clone, Copy)]
+struct Park {
+    x: f64,
+    y: f64,
+    max_step: f64,
+}
+
+impl Park {
+    fn on_main_display() -> Park {
+        let b = CGDisplay::main().bounds();
+        Park {
+            x: (b.origin.x + b.size.width / 2.0).round(),
+            y: (b.origin.y + b.size.height / 2.0).round(),
+            max_step: b.size.width.min(b.size.height) / 3.0,
+        }
+    }
 }
 
 /// A grab or release requested by the engine, carried out on the tap thread.
@@ -446,7 +461,7 @@ impl MacCapture {
             block_drag: AtomicBool::new(true),
             grabbed: AtomicBool::new(false),
             cursor_hidden: AtomicBool::new(false),
-            park: Mutex::new(main_display_center()),
+            park: Mutex::new(Park::on_main_display()),
             buttons: AtomicU8::new(0),
             desktop: RwLock::new(Desktop::new(displays())),
             hotkeys: Mutex::new(HotkeyMatcher::default()),
@@ -638,14 +653,23 @@ fn on_event(s: &Shared, etype: CGEventType, event: &CGEvent) -> CallbackResult {
             let dx = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_X);
             let dy = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_Y);
             if grabbed {
-                if dx != 0.0 || dy != 0.0 {
-                    let _ = s.tx.send(CaptureEvent::Motion { dx, dy });
+                // Measure the movement from the parking spot rather than with
+                // macOS's delta fields: those count our own warps as movement
+                // (the jump from the screen edge to the parking spot, then a
+                // step back after every movement), which sent the cursor
+                // straight back out of the other computer. Like Input Leap,
+                // ignore a jump too big to be the mouse (a warp that hadn't
+                // landed yet).
+                let park = *s.park.lock().unwrap();
+                let at = event.location();
+                let (mx, my) = (at.x - park.x, at.y - park.y);
+                if (mx != 0.0 || my != 0.0) && mx.abs() < park.max_step && my.abs() < park.max_step {
+                    let _ = s.tx.send(CaptureEvent::Motion { dx: mx, dy: my });
                 }
                 // Keep the hidden cursor parked. macOS ignores the warp unless
                 // the movement itself goes through (Input Leap's experience),
                 // so let it.
-                let (px, py) = *s.park.lock().unwrap();
-                warp_cursor(px, py);
+                warp_cursor(park.x, park.y);
                 return CallbackResult::Keep;
             }
             maybe_begin(s, event.location(), dx, dy);
@@ -749,13 +773,13 @@ fn start_grab(s: &Shared) {
         return;
     }
     set_warp_suppression(0.0001);
-    let park = main_display_center();
+    let park = Park::on_main_display();
     *s.park.lock().unwrap() = park;
     allow_background_cursor_hiding();
     if !s.cursor_hidden.swap(true, Ordering::AcqRel) {
         let _ = CGDisplay::main().hide_cursor();
     }
-    warp_cursor(park.0, park.1);
+    warp_cursor(park.x, park.y);
     // Never detach the mouse from the cursor (see the module notes); saying
     // so explicitly also undoes the brief detach a warp causes.
     let _ = CGDisplay::associate_mouse_and_mouse_cursor_position(true);

@@ -151,7 +151,7 @@ function renderLayout() {
   const activeId = f.kind === "controlling" ? f.peer : null;
   const ips = state.me.ips ?? [];
   const ip = ips.length
-    ? `<button class="tile-ip" data-action="copy-ip" data-ip="${esc(ips[0])}" title="${esc(ips.length > 1 ? `Also: ${ips.slice(1).join(", ")}. ` : "")}Click to copy">${esc(ips[0])} · port ${esc(state.me.port)}</button>`
+    ? `<button class="tile-ip" data-action="copy-ip" data-ip="${esc(ips[0])}" title="${esc(ips.length > 1 ? `Also: ${ips.slice(1).join(", ")}. ` : "")}Port ${esc(state.me.port)}. Click to copy.">Your IP is ${esc(ips[0])}</button>`
     : "";
   setHTML(
     $("#this-computer"),
@@ -247,6 +247,7 @@ function renderSettings() {
   $("#about").innerHTML = `
     <dt>Key</dt><dd><code>${esc(state.me.fingerprint)}</code></dd>
     <dt>Device id</dt><dd><code>${esc(state.me.id)}</code></dd>
+    <dt>IP address</dt><dd>${(state.me.ips ?? []).length ? state.me.ips.map((ip) => `<code>${esc(ip)}</code>`).join(" ") : "Not connected to a network"}</dd>
     <dt>Port</dt><dd>${esc(state.me.port)}</dd>
     <dt>Input</dt><dd>${esc(info.backend)}</dd>
     <dt>Version</dt><dd>${esc(state.me.version)}</dd>

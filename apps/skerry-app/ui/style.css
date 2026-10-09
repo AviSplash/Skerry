@@ -207,7 +207,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .this-computer .tile .screen-icon { width: 46px; height: 34px; color: var(--accent); }
 .tile-ip {
-  font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--accent-strong);
+  font: inherit; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-strong);
   background: transparent; border: none; border-radius: 6px; padding: 2px 6px; cursor: pointer;
 }
 .tile-ip:hover { background: var(--accent-soft); }
