@@ -305,3 +305,34 @@ async fn scan_finds_computers_that_discovery_missed() {
     wait_for("code shown on b", || b.h.snapshot().pairings.iter().any(|p| p.stage == "show_code")).await;
     a.h.cancel_pairing(s);
 }
+
+#[tokio::test]
+async fn reinstalled_computer_does_not_flap() {
+    // b is paired, then reinstalled: same address, new identity, paired again.
+    let a = Node::new(OsKind::Macos).await;
+    let old_b = Node::new(OsKind::Windows).await;
+    let (ok, msg) = pair(&a, &old_b, false).await;
+    assert!(ok, "{msg}");
+    wait_for("old b online", || online(&a, &old_b)).await;
+    let port = old_b.port;
+    old_b.h.shutdown().await;
+    drop(old_b);
+
+    let b = Node::with(OsKind::Windows, |o| o.listen = Some(format!("127.0.0.1:{port}").parse().unwrap())).await;
+    let (ok, msg) = pair(&a, &b, false).await;
+    assert!(ok, "{msg}");
+    wait_for("new b online", || online(&a, &b) && online(&b, &a)).await;
+
+    // The stale entry must not keep redialling b and replacing its connection.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut events = b.h.subscribe();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let mut changes = 0;
+    while let Ok(ev) = events.try_recv() {
+        if matches!(ev, EngineEvent::State(_)) {
+            changes += 1;
+        }
+    }
+    assert!(changes <= 1, "b's state kept changing ({changes} times): the connection is flapping");
+    assert!(online(&a, &b));
+}

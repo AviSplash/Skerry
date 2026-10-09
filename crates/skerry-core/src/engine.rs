@@ -109,6 +109,8 @@ pub struct MeView {
     pub fingerprint: String,
     pub port: u16,
     pub version: String,
+    /// This computer's IPv4 addresses on the local network, most likely first.
+    pub ips: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -367,6 +369,7 @@ pub async fn start(opts: EngineOptions, backends: Backends) -> Result<EngineHand
         last_errors: HashMap::new(),
         scanning: false,
         scan_extra: opts.scan_extra,
+        ips: net::local_ips(),
         dirty: true,
     };
     engine.publish();
@@ -526,7 +529,12 @@ fn spawn_listener(
 ) {
     tokio::spawn(async move {
         loop {
-            let (stream, addr) = match listener.accept().await {
+            // Stop listening (and free the port) once the engine has stopped.
+            let accepted = tokio::select! {
+                a = listener.accept() => a,
+                _ = tx.closed() => return,
+            };
+            let (stream, addr) = match accepted {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::warn!("accept failed: {e}");
@@ -593,6 +601,7 @@ fn placeholder_snapshot() -> Snapshot {
             fingerprint: String::new(),
             port: DEFAULT_PORT,
             version: crate::APP_VERSION.to_string(),
+            ips: Vec::new(),
         },
         settings: SettingsView {
             enabled: true,
@@ -666,6 +675,8 @@ struct Engine {
     last_errors: HashMap<String, String>,
     scanning: bool,
     scan_extra: Vec<SocketAddr>,
+    /// This computer's addresses, shown so people don't need a terminal to find them.
+    ips: Vec<String>,
     dirty: bool,
 }
 
@@ -881,6 +892,22 @@ impl Engine {
     fn on_established(&mut self, session: Session, hello: Hello, intent: Intent) {
         let peer_id = device_id_for(&session.remote_static);
         match &intent {
+            Intent::Reconnect(id) if *id != peer_id => {
+                // A different computer answers at this peer's address, e.g. it
+                // got a new identity after Skerry was reinstalled. Treat it as a
+                // failed attempt so the old entry backs off instead of redialling
+                // (and replacing the live connection) on every tick.
+                let note = format!("{} now answers at this address as a different computer.", hello.name);
+                if self.last_errors.get(id) != Some(&note) {
+                    self.last_errors.insert(id.clone(), note);
+                    self.dirty = true;
+                }
+                if let Some(r) = self.reconnect.get_mut(id) {
+                    r.in_progress = false;
+                    r.backoff = (r.backoff * 2).min(MAX_RECONNECT_BACKOFF);
+                    r.next_at = Instant::now() + r.backoff;
+                }
+            }
             Intent::Reconnect(id) => {
                 if let Some(r) = self.reconnect.get_mut(id) {
                     r.in_progress = false;
@@ -1898,6 +1925,14 @@ impl Engine {
 
         // Reconnect to paired peers.
         let peers: Vec<PeerConfig> = self.cfg.peers.clone();
+        // Addresses already used by a connected peer: dialling them for another
+        // peer only reaches the connected one again.
+        let in_use: Vec<String> = self
+            .online
+            .values()
+            .filter_map(|c| self.conns.get(c))
+            .map(|c| SocketAddr::new(c.addr.ip(), c.hello.port).to_string())
+            .collect();
         for pc in peers {
             if self.online.contains_key(&pc.id) {
                 continue;
@@ -1920,6 +1955,7 @@ impl Engine {
                     targets.push(a.clone());
                 }
             }
+            targets.retain(|t| !in_use.contains(t));
             if targets.is_empty() {
                 continue;
             }
@@ -1953,6 +1989,11 @@ impl Engine {
         // Display configuration changes.
         if now.duration_since(self.last_display_poll) >= DISPLAY_POLL {
             self.last_display_poll = now;
+            let ips = net::local_ips();
+            if ips != self.ips {
+                self.ips = ips;
+                self.dirty = true;
+            }
             let local = Desktop::new(self.capture.displays());
             if local != self.local_desktop {
                 self.local_desktop = local;
@@ -2086,6 +2127,7 @@ impl Engine {
                 fingerprint: self.identity.fingerprint(),
                 port: self.port,
                 version: crate::APP_VERSION.to_string(),
+                ips: self.ips.clone(),
             },
             settings: SettingsView {
                 enabled: self.cfg.enabled,
