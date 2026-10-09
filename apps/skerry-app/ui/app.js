@@ -243,9 +243,7 @@ function renderSettings() {
   }
   const actionName = (a) =>
     ({ left: "Go to the computer on the left", right: "Go to the computer on the right", top: "Go to the computer above", bottom: "Go to the computer below", home: "Bring the mouse back here" })[a] ?? a;
-  $("#hotkeys").innerHTML = state.hotkeys
-    .map((h) => `<li><span>${esc(actionName(h.action))}</span><kbd>${esc(h.keys.split("+").map((k) => k[0].toUpperCase() + k.slice(1)).join(" + "))}</kbd></li>`)
-    .join("");
+  setHTML($("#hotkeys"), hotkeysHTML(state.hotkeys, actionName));
   $("#manual-list").innerHTML = state.manual_peers
     .map((a) => `<li><code>${esc(a)}</code><button class="icon-btn" data-action="remove-manual" data-addr="${esc(a)}" aria-label="Remove ${esc(a)}">Remove</button></li>`)
     .join("");
@@ -258,6 +256,27 @@ function renderSettings() {
     <dt>Version</dt><dd>${esc(state.me.version)}</dd>
     <dt>Settings file</dt><dd><code>${esc(info.config_path)}</code></dd>
     ${info.log_dir ? `<dt>Logs</dt><dd><code>${esc(info.log_dir)}</code></dd>` : ""}`;
+}
+
+// Hotkeys as keycaps. When they all share the same modifiers (the default
+// Ctrl + Alt + Shift), those are shown once and each hotkey shows its last key.
+const KEY_LABEL = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", escape: "Esc", left: "←", right: "→", up: "↑", down: "↓" };
+const META_LABEL = { macos: "Cmd", windows: "Win" };
+const keyLabel = (k) =>
+  k === "meta" ? (META_LABEL[state.me.os] ?? "Super") : (KEY_LABEL[k.toLowerCase()] ?? k[0].toUpperCase() + k.slice(1));
+const keycaps = (keys) => keys.map((k) => `<kbd>${esc(keyLabel(k))}</kbd>`).join("");
+
+function hotkeysHTML(hotkeys, actionName) {
+  const parts = hotkeys.map((h) => h.keys.split("+"));
+  const mods = parts[0]?.slice(0, -1).join("+");
+  const shared = parts.length > 1 && mods && parts.every((p) => p.slice(0, -1).join("+") === mods);
+  const head = shared
+    ? `<div class="hotkeys-head">Hold ${keycaps(parts[0].slice(0, -1))} and press</div>`
+    : "";
+  const items = hotkeys
+    .map((h, i) => `<li><span class="hotkey-keys">${keycaps(shared ? parts[i].slice(-1) : parts[i])}</span><span>${esc(actionName(h.action))}</span></li>`)
+    .join("");
+  return `${head}<ul class="hotkeys${shared ? " shared" : ""}">${items}</ul>`;
 }
 
 function renderDialog() {
