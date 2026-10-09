@@ -10,6 +10,12 @@
 //! Emulation uses `SendInput` with absolute virtual-desktop coordinates and
 //! scan codes, so the receiving computer's keyboard layout applies.
 //!
+//! Edge switching pauses while a game (or any app) hides the cursor or locks
+//! it inside a window: games read the mouse as raw input, so a flick that
+//! drags the hidden cursor to an edge would otherwise hand the keyboard to
+//! another computer while the game still seems to follow the mouse. The
+//! switching hotkeys keep working.
+//!
 //! Limitations of Windows itself: input cannot be injected into the secure
 //! desktop (UAC prompts, Ctrl+Alt+Del, the lock screen) or into elevated
 //! windows unless Skerry also runs elevated.
@@ -40,14 +46,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_XUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateCursor, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
-    GetSystemMetrics, PostThreadMessageW, RegisterClassW, SetCursorPos, SetLayeredWindowAttributes, SetWindowPos,
-    SetWindowsHookExW, ShowWindow, TranslateMessage, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
-    LLKHF_INJECTED, LLMHF_INJECTED, LWA_ALPHA, MSG, MSLLHOOKSTRUCT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, XBUTTON1, XBUTTON2,
+    CallNextHookEx, CreateCursor, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClipCursor, GetCursorInfo,
+    GetCursorPos, GetMessageW, GetSystemMetrics, PostThreadMessageW, RegisterClassW, SetCursorPos,
+    SetLayeredWindowAttributes, SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage, CURSORINFO,
+    CURSOR_SHOWING, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLMHF_INJECTED,
+    LWA_ALPHA, MSG, MSLLHOOKSTRUCT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, XBUTTON1, XBUTTON2,
 };
 
 type Parts = (Box<dyn Capture>, Box<dyn Emulation>, Box<dyn ScreenSource>, String);
@@ -113,6 +120,8 @@ struct Shared {
     /// must still reach Windows or they would stay stuck.
     local_keys: Mutex<HashSet<u32>>,
     thread_id: AtomicU32,
+    /// Edge switching is paused because an app hides or confines the cursor.
+    app_owns_cursor: AtomicBool,
 }
 
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
@@ -139,6 +148,7 @@ impl WinCapture {
             hotkeys: Mutex::new(HotkeyMatcher::default()),
             local_keys: Mutex::new(HashSet::new()),
             thread_id: AtomicU32::new(0),
+            app_owns_cursor: AtomicBool::new(false),
         });
         if SHARED.set(shared.clone()).is_err() {
             anyhow::bail!("the Windows capture backend can only be created once per process");
@@ -320,6 +330,29 @@ fn os_mods() -> Mods {
     m
 }
 
+/// Does the foreground app own the cursor, the way games do? True when the
+/// cursor is hidden or confined to part of the desktop (`ClipCursor`). Such
+/// an app reads the mouse as raw input, so the cursor reaching an edge says
+/// nothing about where the user wants to be.
+fn app_owns_cursor() -> bool {
+    unsafe {
+        let mut info = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
+        if GetCursorInfo(&mut info).is_ok() && info.flags.0 & CURSOR_SHOWING.0 == 0 {
+            return true;
+        }
+        let mut clip = RECT::default();
+        if GetClipCursor(&mut clip).is_ok() {
+            let (vx, vy) = (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
+            let (vw, vh) = (GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+            let whole = clip.left <= vx && clip.top <= vy && clip.right >= vx + vw && clip.bottom >= vy + vh;
+            if !whole {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 fn send(s: &Shared, ev: CaptureEvent) {
     let _ = s.tx.send(ev);
 }
@@ -423,6 +456,17 @@ fn maybe_begin(s: &Shared, pt: POINT) -> bool {
             return false;
         }
         drop(desk);
+        let owned = app_owns_cursor();
+        if s.app_owns_cursor.swap(owned, Ordering::Relaxed) != owned {
+            if owned {
+                tracing::info!("edge switching paused: an app (likely a game) has hidden or locked the cursor");
+            } else {
+                tracing::info!("edge switching resumed");
+            }
+        }
+        if owned {
+            return false;
+        }
         start_grab(s);
         send(s, CaptureEvent::Begin { edge, x, y });
         (x, y)

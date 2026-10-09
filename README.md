@@ -50,9 +50,9 @@ Download the installer for each computer from its release:
 
 | OS | Release | File |
 |---|---|---|
-| Windows | [v1.1.6 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.6-windows) | `Skerry_1.1.6_x64-setup.exe` or `.msi` |
-| macOS | [v1.1.6 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.6-macos) | `Skerry_1.1.6_universal.dmg` (Apple Silicon and Intel) |
-| Linux | [v1.1.6 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.6-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
+| Windows | [v1.1.7 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.7-windows) | `Skerry_1.1.7_x64-setup.exe` or `.msi` |
+| macOS | [v1.1.7 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.7-macos) | `Skerry_1.1.7_universal.dmg` (Apple Silicon and Intel) |
+| Linux | [v1.1.7 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.7-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
 
 Install Skerry on **every** computer you want to share between. Use the same version everywhere.
 
@@ -143,7 +143,8 @@ Start with **Settings → Advanced → Help → Diagnostics**. It shows what Ske
   2. it's placed on the side where it really is, in the **Arrangement** on either computer;
   3. you're pushing against the *outer* edge: with several monitors, that's the edge of the outermost monitor on that side;
   4. no mouse button is held (switching waits while you drag, unless you turn that off);
-  5. on a Mac, Skerry is allowed under **Accessibility**.
+  5. on a Mac, Skerry is allowed under **Accessibility**;
+  6. on Windows, no game or other app has hidden or locked the cursor. While one does, the edges don't switch, so a fast mouse flick in a game can't send your keyboard to the other computer. The hotkeys still switch.
 - **On a Mac, Skerry says it needs permission although it's already switched on.** macOS ties the approval to the exact copy of Skerry you approved.
   - **Skerry 1.1.2 and earlier** weren't signed as a whole app (only the program inside was), so macOS never applied the approval, however often it was switched on. Install the latest version, quit Skerry, remove every Skerry entry under **Accessibility** and **Input Monitoring** with the **−** button, then open Skerry and allow it again.
   - **After an update**, a Mac build without Skerry's own certificate is a new app to macOS. Skerry notices and clears the old entry itself, so macOS asks once and you allow Skerry again. If the switch still shows on but Skerry says it needs permission, click **Reset permissions** in Skerry's banner (or in Terminal: `tccutil reset Accessibility org.skerry.app`, then reopen Skerry). Releases signed with Skerry's own certificate (see [Releasing](#releasing)) keep the approval across updates.
