@@ -33,7 +33,7 @@ const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 const screenIcon = (cls = "screen-icon") =>
-  `<svg class="${cls}" viewBox="0 0 34 26" aria-hidden="true"><rect x="1.5" y="1.5" width="31" height="19" rx="3" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 24.5h10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+  `<svg class="${cls}" viewBox="0 0 36 28" aria-hidden="true"><rect class="bezel" x="1.5" y="1.5" width="33" height="20" rx="4"/><rect class="glass" x="5" y="5" width="26" height="13" rx="1.5"/><path class="stand" d="M13 26h10"/></svg>`;
 
 // Replace an element's contents only when they changed. State arrives often
 // (every connection change, every screen update from another computer), and
@@ -140,6 +140,7 @@ function tile(peer, { removable = false, active = false } = {}) {
   const online = peer.online;
   return `<div class="tile ${online ? "" : "offline"} ${active ? "active" : ""}" draggable="true" data-id="${esc(peer.id)}">
       ${removable ? `<button class="remove" data-action="unplace" data-id="${esc(peer.id)}" title="Remove from this side" aria-label="Remove ${esc(peer.name)} from this side">×</button>` : ""}
+      ${active ? `<span class="tile-tag">In control</span>` : ""}
       ${screenIcon()}
       <div class="tile-name">${esc(peer.name)}</div>
       <div class="tile-meta"><span class="status-dot ${online ? "on" : ""}"></span>${online ? (peer.available ? "Ready" : "Paused") : "Offline"} · ${esc(OS_LABEL[peer.os] ?? "")}</div>
@@ -164,6 +165,8 @@ function renderLayout() {
     </div>`,
   );
 
+  $("#this-computer").classList.toggle("here", state.settings.enabled && f.kind === "local");
+
   const paired = state.peers.filter((p) => p.paired);
   const unplaced = paired.filter((p) => !p.edge);
   for (const edge of EDGES) {
@@ -173,6 +176,8 @@ function renderLayout() {
     // Leave a side alone while its "Place…" menu is open.
     if (slot.contains(document.activeElement) && document.activeElement.tagName === "SELECT") continue;
     slot.classList.toggle("filled", !!peer);
+    slot.classList.toggle("online", !!peer?.online);
+    slot.classList.toggle("active", !!peer && peer.id === activeId);
     if (peer) {
       setHTML(slot, tile(peer, { removable: true, active: peer.id === activeId }));
     } else {
@@ -194,7 +199,7 @@ function renderDevices() {
         .map((p) => {
           const open = openRows.has(p.id);
           const where = p.edge ? ` · ${EDGE_LABEL[p.edge]}` : "";
-          return `<div class="device ${open ? "open" : ""}" draggable="true" data-id="${esc(p.id)}">
+          return `<div class="device ${open ? "open" : ""} ${p.online ? "online" : ""}" draggable="true" data-id="${esc(p.id)}">
             ${screenIcon()}
             <div class="name">${esc(p.name)}</div>
             <div class="meta"><span class="status-dot ${p.online ? "on" : ""}"></span>${p.online ? "Online" : "Offline"} · ${esc(OS_LABEL[p.os] ?? "")}${esc(where)}</div>
@@ -468,6 +473,47 @@ function toast(message, kind = "") {
 }
 
 // ---------------------------------------------------------------------------
+// Sections and theme
+// ---------------------------------------------------------------------------
+
+const VIEWS = {
+  desk: ["Desk", "Drag a computer to the side of this screen where it sits on your desk. Then move the mouse off that edge."],
+  settings: ["Settings", ""],
+  help: ["Help", "Hotkeys, addresses and what to do when something isn't working."],
+};
+
+function showView(view) {
+  if (!VIEWS[view]) view = "desk";
+  for (const el of document.querySelectorAll(".view")) el.hidden = el.dataset.view !== view;
+  for (const el of document.querySelectorAll(".nav-item")) {
+    if (el.dataset.view === view) el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
+  }
+  $("#page-title").textContent = VIEWS[view][0];
+  $("#page-sub").textContent = VIEWS[view][1];
+  $(".sheet").scrollTop = 0;
+}
+
+// "system", "light" or "dark". theme.js applies the saved one before the page
+// paints; this also tells the window, so its title bar matches.
+function setTheme(theme, save) {
+  document.documentElement.dataset.theme = theme;
+  for (const r of document.querySelectorAll('input[name="theme"]')) r.checked = r.value === theme;
+  if (save) {
+    try {
+      localStorage.setItem("skerry-theme", theme);
+    } catch {
+      // Not saved; it still applies until Skerry restarts.
+    }
+  }
+  try {
+    window.__TAURI__?.window?.getCurrentWindow().setTheme(theme === "system" ? null : theme).catch(() => {});
+  } catch {
+    // Older webviews: the page still follows the setting.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 
@@ -484,6 +530,10 @@ function onEngineEvent(ev) {
 }
 
 function wire() {
+  for (const el of document.querySelectorAll(".nav-item")) el.addEventListener("click", () => showView(el.dataset.view));
+  for (const r of document.querySelectorAll('input[name="theme"]')) r.addEventListener("change", () => setTheme(r.value, true));
+  setTheme(document.documentElement.dataset.theme || "system", false);
+
   $("#my-name").addEventListener("change", (e) => {
     const name = e.target.value.trim();
     if (name) call("update_settings", { settings: { name } });
