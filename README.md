@@ -50,17 +50,17 @@ Download the installer for each computer from its release:
 
 | OS | Release | File |
 |---|---|---|
-| Windows | [v1.1.3 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.3-windows) | `Skerry_1.1.3_x64-setup.exe` or `.msi` |
-| macOS | [v1.1.3 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.3-macos) | `Skerry_1.1.3_universal.dmg` (Apple Silicon and Intel) |
-| Linux | [v1.1.3 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.3-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
+| Windows | [v1.1.4 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.4-windows) | `Skerry_1.1.4_x64-setup.exe` or `.msi` |
+| macOS | [v1.1.4 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.4-macos) | `Skerry_1.1.4_universal.dmg` (Apple Silicon and Intel) |
+| Linux | [v1.1.4 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.4-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
 
 Install Skerry on **every** computer you want to share between. Use the same version everywhere.
 
 ### Updates
 
-Skerry 1.1 and later update themselves. When a new version is out, the window shows **Skerry x.y is available → Update and restart**; you can also use **Check for updates** in the tray menu or under **Settings → Advanced → Help**. Updates are downloaded from this repository's releases and verified against a signing key built into Skerry before they're installed. Pairings and settings are kept. To stop automatic checks, turn off **Settings → Check for updates**.
+Skerry 1.1.4 and later update themselves. When a new version is out, the window shows **Skerry x.y is available → Update and restart**; you can also use **Check for updates** in the tray menu or under **Settings → Advanced → Help**, which tells you when there's nothing new. Updates are downloaded from this repository's releases and verified against a signing key built into Skerry before they're installed. Pairings and settings are kept. To stop automatic checks, turn off **Settings → Check for updates**.
 
-Coming from 1.0, install 1.1 once by hand over the old version (no need to uninstall first).
+Coming from 1.1.3 or earlier, install the latest version once by hand over the old one (no need to uninstall first): those versions trust an older signing key.
 
 ### First run, by OS
 
@@ -105,7 +105,7 @@ On a Mac, Alt is the Option key. You can change hotkeys in the settings file (sh
 
 ```text
 $ skerry-cli run
-Skerry 1.1.3 on studio (X11)
+Skerry 1.1.4 on studio (X11)
 device id 1c843bbbadba346f  fingerprint 1c84-3bbb-adba-346f-1f47  port 24870
 Type `help` for commands.
 > devices
@@ -196,7 +196,7 @@ apps/skerry-app          desktop app (Tauri 2; the UI is plain HTML/CSS/JS in ui
 
 ## Releasing
 
-Run **Actions → Release → Run workflow** with a version like `v1.2`. It builds every platform, publishes the three releases, and, when the repository has the secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, signs the updates and publishes `latest.json` on the `updater` branch, which installed copies check. The public half of that key is `plugins.updater.pubkey` in `apps/skerry-app/tauri.conf.json`. Keep the private key safe: a lost key means existing installs can't verify later updates.
+Run **Actions → Release → Run workflow** with a version like `v1.2`. It builds every platform, publishes the three releases, signs every update, and publishes `latest.json` on the `updater` branch, which installed copies check. It needs the update signing key once: run `.github/scripts/make-updater-key.sh` and add the secrets `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and `TAURI_UPDATER_PUBLIC_KEY`. Before building, the workflow checks that the private key matches the public key built into Skerry; before publishing `latest.json`, it downloads every update and verifies its signature the way installed copies will. Keep the private key safe: a lost key means installed copies can't verify later updates. Full steps: [docs/releasing.md](docs/releasing.md).
 
 macOS remembers Accessibility, Input Monitoring and Local Network approval per signing identity. Without a certificate, Mac builds are ad-hoc signed: the whole app is signed as `org.skerry.app`, but each build is a new identity, so users allow Skerry again after every update. The Release workflow fails if the app isn't signed as a whole (`.github/scripts/macos-verify-signature.sh`). To keep approvals across updates, give the workflow a certificate, and always use the same one:
 

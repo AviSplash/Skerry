@@ -279,7 +279,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         Some(u) => u,
         None => {
             let updater = app.updater().map_err(|e| e.to_string())?;
-            match updater.check().await.map_err(check_error)? {
+            match check(&updater).await? {
                 Some(u) => u,
                 None => return Err("Skerry is already up to date.".into()),
             }
@@ -302,7 +302,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
             || {},
         )
         .await
-        .map_err(|e| format!("Download failed: {e}"))?;
+        .map_err(|e| install_error("Downloading the update failed", e))?;
 
     tracing::info!("installing Skerry {}", update.version);
     let engine = app.state::<AppState>().engine.clone();
@@ -315,31 +315,67 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         app.restart();
         #[cfg(not(target_os = "windows"))]
-        return Err(format!("Installing the update failed: {e}"));
+        return Err(install_error("Installing the update failed", e));
     }
     engine.shutdown().await;
     app.restart();
 }
 
+const RELEASES: &str = "github.com/AviSplash/Skerry/releases";
+
+/// Whether an update check found that no update is published for this
+/// computer: no update information online yet (the feed doesn't exist), or
+/// none for this system or kind of installation. That means Skerry is up to
+/// date, not that checking failed.
+fn nothing_published(e: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error as E;
+    matches!(e, E::ReleaseNotFound | E::TargetNotFound(_) | E::TargetsNotFound(_))
+}
+
+/// Ask the update feed for a newer version. `Ok(None)` means Skerry is up
+/// to date.
+async fn check(updater: &tauri_plugin_updater::Updater) -> Result<Option<Update>, String> {
+    match updater.check().await {
+        Ok(found) => Ok(found),
+        Err(e) if nothing_published(&e) => {
+            tracing::info!("no update published for this computer ({e})");
+            Ok(None)
+        }
+        Err(e) => Err(check_error(e)),
+    }
+}
+
 fn check_error(e: tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error as E;
     tracing::info!("update check failed: {e}");
-    let raw = e.to_string();
-    if raw.contains("valid release JSON") || raw.contains("404") {
-        "Couldn't get update information. Check the internet connection, or download the latest version from \
-         github.com/AviSplash/Skerry/releases."
-            .into()
-    } else if raw.contains("platforms") {
-        "Automatic updates aren't available for this kind of installation. Download the latest version from \
-         github.com/AviSplash/Skerry/releases."
-            .into()
-    } else {
-        format!("Couldn't check for updates: {raw}")
+    match e {
+        E::Reqwest(_) | E::Network(_) => {
+            "Couldn't reach the update server. Check the internet connection and try again.".into()
+        }
+        _ => format!("Couldn't check for updates ({e}). The latest version is always at {RELEASES}."),
+    }
+}
+
+/// Explain a failed download or installation of an update.
+fn install_error(what: &str, e: tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error as E;
+    tracing::error!("{what}: {e}");
+    match e {
+        E::Minisign(_) | E::Base64(_) | E::SignatureUtf8(_) => format!(
+            "This update isn't signed with the key this copy of Skerry trusts, so it wasn't installed. Download \
+             the latest version from {RELEASES} and install it over this one once; later updates then install \
+             themselves."
+        ),
+        E::Reqwest(_) | E::Network(_) => {
+            format!("{what}: couldn't download it. Check the internet connection and try again.")
+        }
+        _ => format!("{what} ({e}). You can also download the latest version from {RELEASES}."),
     }
 }
 
 async fn find_update(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
     let updater = app.updater().map_err(|e| e.to_string())?;
-    let found = updater.check().await.map_err(check_error)?;
+    let found = check(&updater).await?;
     let info = found.as_ref().map(|u| UpdateInfo {
         version: u.version.clone(),
         current: u.current_version.clone(),
