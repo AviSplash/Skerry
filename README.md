@@ -21,9 +21,22 @@ Skerry is a software KVM. Put your computers side by side, tell Skerry where eac
 A *skerry* is a small rocky island. Your cursor hops across them.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img src="docs/screenshot-light.png" alt="The Skerry window: the Desk, with a MacBook Air and a Gaming PC placed either side of this computer">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desk-dark.png">
+  <img src="docs/screenshots/desk-light.png" alt="The Skerry Desk: a MacBook Air and a Gaming PC placed either side of this computer">
 </picture>
+
+<table>
+  <tr>
+    <td><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
+  <img src="docs/screenshots/settings-light.png" alt="Settings: appearance (System, Light or Dark), sharing and app options">
+</picture></td>
+    <td><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/help-dark.png">
+  <img src="docs/screenshots/help-light.png" alt="Help: troubleshooting, hotkeys and extra addresses">
+</picture></td>
+  </tr>
+</table>
 
 ## Features
 
