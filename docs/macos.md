@@ -6,6 +6,7 @@ macOS asks before an app may see or send keyboard and mouse input, and (from mac
 - [Installing and first launch](#installing-and-first-launch)
 - [Fixing permissions](#fixing-permissions)
 - [Fixing Local Network](#fixing-local-network)
+- [If the Mac's mouse or keyboard stops responding](#if-the-macs-mouse-or-keyboard-stops-responding)
 - [Checking how your copy is signed](#checking-how-your-copy-is-signed)
 - [For maintainers: signing releases](#for-maintainers-signing-releases)
 - [Background: why this went wrong before 1.1.3](#background-why-this-went-wrong-before-113)
@@ -81,6 +82,16 @@ sudo defaults write com.apple.network.local-network AllowedEthernetLocalNetworkA
 ```
 
 macOS only lets you remove an app from the Local Network list from macOS 27.2 (the **−** button there). On earlier versions, entries for old copies of Skerry stay in the list; switching the current one off and on is the way to refresh it.
+
+## If the Mac's mouse or keyboard stops responding
+
+Skerry 1.1.3 and earlier could leave the Mac's mouse and keyboard dead after control came back from another computer: they detached the mouse from the cursor while controlling the other computer, and macOS doesn't always let a background app re-attach it. Since 1.1.4 Skerry keeps the hidden cursor parked by moving it back after every movement instead (as Input Leap and Barrier do), so there's nothing to re-attach.
+
+If it still happens:
+
+1. Press **Ctrl + Option + Shift + Esc**: it brings the mouse home and releases everything.
+2. If that doesn't help, quit Skerry from another computer's keyboard if you can, or press **⌘ + Option + Esc** and force-quit Skerry. Input comes back as soon as Skerry is gone.
+3. Send the **Diagnostics** report: since 1.1.4 its log shows every switch ("controlling …", "back on this computer").
 
 ## Checking how your copy is signed
 
