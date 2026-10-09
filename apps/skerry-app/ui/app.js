@@ -35,6 +35,16 @@ const esc = (s) =>
 const screenIcon = (cls = "screen-icon") =>
   `<svg class="${cls}" viewBox="0 0 34 26" aria-hidden="true"><rect x="1.5" y="1.5" width="31" height="19" rx="3" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 24.5h10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`;
 
+// Replace an element's contents only when they changed. State arrives often
+// (every connection change, every screen update from another computer), and
+// rebuilding unchanged HTML closes open dropdowns and swallows clicks.
+const shownHTML = new WeakMap();
+function setHTML(el, html) {
+  if (shownHTML.get(el) === html) return;
+  shownHTML.set(el, html);
+  el.innerHTML = html;
+}
+
 function peerName(id) {
   return state.peers.find((p) => p.id === id)?.name ?? "another computer";
 }
@@ -139,12 +149,20 @@ function tile(peer, { removable = false, active = false } = {}) {
 function renderLayout() {
   const f = state.focus;
   const activeId = f.kind === "controlling" ? f.peer : null;
-  $("#this-computer").innerHTML = `<div class="tile ${f.kind === "local" ? "" : ""}">
+  const ips = state.me.ips ?? [];
+  const ip = ips.length
+    ? `<button class="tile-ip" data-action="copy-ip" data-ip="${esc(ips[0])}" title="${esc(ips.length > 1 ? `Also: ${ips.slice(1).join(", ")}. ` : "")}Click to copy">${esc(ips[0])} · port ${esc(state.me.port)}</button>`
+    : "";
+  setHTML(
+    $("#this-computer"),
+    `<div class="tile">
       <span class="badge-here">This computer</span>
       ${screenIcon()}
       <div class="tile-name">${esc(state.me.name)}</div>
       <div class="tile-meta">${esc(OS_LABEL[state.me.os] ?? "")}</div>
-    </div>`;
+      ${ip}
+    </div>`,
+  );
 
   const paired = state.peers.filter((p) => p.paired);
   const unplaced = paired.filter((p) => !p.edge);
@@ -152,15 +170,17 @@ function renderLayout() {
     const slot = document.querySelector(`.slot[data-edge="${edge}"]`);
     const id = state.layout[edge];
     const peer = id && paired.find((p) => p.id === id);
+    // Leave a side alone while its "Place…" menu is open.
+    if (slot.contains(document.activeElement) && document.activeElement.tagName === "SELECT") continue;
     slot.classList.toggle("filled", !!peer);
     if (peer) {
-      slot.innerHTML = tile(peer, { removable: true, active: peer.id === activeId });
+      setHTML(slot, tile(peer, { removable: true, active: peer.id === activeId }));
     } else {
       const options = unplaced.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
-      slot.innerHTML = `<div class="slot-empty">
+      setHTML(slot, `<div class="slot-empty">
           <span>${paired.length ? "Drop a computer here" : "Pair a computer first"}</span>
           ${unplaced.length ? `<select data-edge="${edge}" aria-label="Place a computer ${EDGE_LABEL[edge]}"><option value="">Place…</option>${options}</select>` : ""}
-        </div>`;
+        </div>`);
     }
   }
 }
@@ -169,7 +189,7 @@ function renderDevices() {
   const paired = state.peers.filter((p) => p.paired);
   const nearby = state.peers.filter((p) => !p.paired);
 
-  $("#paired-list").innerHTML = paired.length
+  setHTML($("#paired-list"), paired.length
     ? paired
         .map((p) => {
           const open = openRows.has(p.id);
@@ -190,9 +210,9 @@ function renderDevices() {
           </div>`;
         })
         .join("")
-    : `<div class="empty">No paired computers yet. Install Skerry on your other computers and connect them to the same network. They'll appear under Nearby.</div>`;
+    : `<div class="empty">No paired computers yet. Install Skerry on your other computers and connect them to the same network. They'll appear under Nearby.</div>`);
 
-  $("#nearby-list").innerHTML = nearby.length
+  setHTML($("#nearby-list"), nearby.length
     ? nearby
         .map(
           (p) => `<div class="device">
@@ -205,7 +225,7 @@ function renderDevices() {
         .join("")
     : state.scanning
       ? `<div class="empty">Scanning this network for computers running Skerry…</div>`
-      : `<div class="empty">Looking for other computers running Skerry on this network. If one doesn't show up, make sure Skerry is running on it and press <strong>Scan network</strong>, or pair by its address below.</div>`;
+      : `<div class="empty">Looking for other computers running Skerry on this network. If one doesn't show up, make sure Skerry is running on it and press <strong>Scan network</strong>, or pair by its address below.</div>`);
 
   const scan = $("#scan");
   scan.disabled = state.scanning;
@@ -339,6 +359,25 @@ async function resetPermissions() {
     toast("Permissions reset. Allow Skerry when macOS asks (or switch it on under Accessibility). If this message stays afterwards, quit and reopen Skerry.", "ok");
   } catch (e) {
     toast(String(e), "error");
+  }
+}
+
+// The id the Forget dialog is asking about. (The webview's built-in confirm()
+// box doesn't appear on macOS, so Skerry asks with its own dialog.)
+let forgetId = null;
+
+function showForget(id) {
+  forgetId = id;
+  $("#forget-title").textContent = `Forget ${peerName(id)}?`;
+  $("#forget-dialog").showModal();
+}
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done, "ok");
+  } catch {
+    toast(`Couldn't copy. The address is ${text}.`, "error");
   }
 }
 
@@ -493,9 +532,12 @@ function wire() {
     if (!el) return;
     const { action, id } = el.dataset;
     if (action === "pair-device") call("pair", { target: { kind: "device", value: id } });
-    else if (action === "forget") {
-      if (confirm(`Forget ${peerName(id)}? You'll need to pair again to use it.`)) call("forget", { id });
-    } else if (action === "toggle-row") {
+    else if (action === "forget") showForget(id);
+    else if (action === "confirm-forget") {
+      $("#forget-dialog").close();
+      call("forget", { id: forgetId });
+    } else if (action === "copy-ip") copyText(el.dataset.ip, "IP address copied.");
+    else if (action === "toggle-row") {
       openRows.has(id) ? openRows.delete(id) : openRows.add(id);
       renderDevices();
     } else if (action === "unplace") {
@@ -574,7 +616,7 @@ main();
 function demoApi() {
   const listeners = [];
   const demo = {
-    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: new URLSearchParams(location.search).has("macperm") ? "macos" : "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.1.0" },
+    me: { id: "1c843bbbadba346f", name: "Studio Desktop", os: new URLSearchParams(location.search).has("macperm") ? "macos" : "linux", fingerprint: "1c84-3bbb-adba-346f-1f47", port: 24870, version: "1.1.0", ips: ["192.168.1.20"] },
     settings: { enabled: true, clipboard_sync: true, swap_cmd_ctrl: true, edge_switching: true, block_switch_while_dragging: true, check_updates: true },
     layout: { left: "a1", right: "b2", top: null, bottom: null },
     peers: [

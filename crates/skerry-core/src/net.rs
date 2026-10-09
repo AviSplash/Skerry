@@ -61,6 +61,22 @@ pub fn local_ipv4() -> Vec<LocalNet> {
     out
 }
 
+/// This computer's IPv4 addresses as text, home-network ranges (192.168.x.x,
+/// then 10.x.x.x, then 172.16-31.x.x) before others such as VPN adapters.
+pub fn local_ips() -> Vec<String> {
+    let mut ips: Vec<Ipv4Addr> = local_ipv4().into_iter().map(|n| n.ip).collect();
+    ips.sort_by_key(|ip| {
+        let o = ip.octets();
+        match o {
+            [192, 168, ..] => 0,
+            [10, ..] => 1,
+            [172, b, ..] if (16..32).contains(&b) => 2,
+            _ => 3,
+        }
+    });
+    ips.iter().map(|ip| ip.to_string()).collect()
+}
+
 fn usable(a: &SocketAddr) -> bool {
     match a.ip() {
         IpAddr::V4(v4) => !v4.is_unspecified() && !v4.is_link_local() && !v4.is_broadcast() && !v4.is_multicast(),
