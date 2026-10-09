@@ -9,12 +9,15 @@ name: Release
 # or push a tag like v1.1 to release that version. The app version is taken
 # from the release name (v1.1 → 1.1.0).
 #
-# In-app updates: when the repository has the secrets
-# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, the
-# installers are also signed for the updater, and once every platform has
-# built, latest.json on the `updater` branch is replaced. Installed copies of
-# Skerry read that file to find and verify new versions. Without the secrets
-# the releases are published as usual and installed copies are not told.
+# In-app updates: every release is signed for the updater with the secrets
+# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, and built
+# to trust TAURI_UPDATER_PUBLIC_KEY (make all three with
+# .github/scripts/make-updater-key.sh; see docs/releasing.md). The build stops
+# before compiling if the key is missing or doesn't match the public key.
+# Once every platform has built, every file in the new latest.json is
+# downloaded and its signature checked, then latest.json on the `updater`
+# branch is replaced. Installed copies of Skerry read that file to find and
+# verify new versions.
 #
 # macOS signing: with the secrets MACOS_CERTIFICATE (base64 .p12) and
 # MACOS_CERTIFICATE_PASSWORD, every Mac build is signed with that certificate,
@@ -46,9 +49,6 @@ jobs:
     name: ${{ matrix.label }}
     outputs:
       signed: ${{ steps.collect.outputs.signed }}
-    env:
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -94,11 +94,17 @@ jobs:
             const p = "apps/skerry-app/tauri.conf.json";
             const c = JSON.parse(fs.readFileSync(p, "utf8"));
             c.version = v;
-            c.bundle.createUpdaterArtifacts = !!process.env.TAURI_SIGNING_PRIVATE_KEY;
             fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
-            console.log(`version ${v}, updater signing ${c.bundle.createUpdaterArtifacts ? "on" : "off (no TAURI_SIGNING_PRIVATE_KEY secret)"}`);
           '
           grep -m1 '^version' Cargo.toml
+      - name: Set up update signing
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        # Exports TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) for the build.
+        run: node .github/scripts/updater-key.mjs prepare apps/skerry-app/tauri.conf.json
       - name: Set up macOS code signing
         if: runner.os == 'macOS'
         env:
@@ -140,7 +146,7 @@ jobs:
           {
             echo "Skerry for **${{ matrix.label }}**. Install it on every computer you want to share one mouse and keyboard between."
             echo
-            echo "**Already have Skerry 1.1 or later?** It updates itself: open Skerry and click **Update and restart** when it says a new version is available. Coming from 1.0, install this version once over the old one; your pairings and settings are kept."
+            echo "**Already have Skerry 1.1.4 or later?** It updates itself: open Skerry and click **Update and restart** when it says a new version is available. Coming from 1.1.3 or earlier, install this version once by hand over the old one; your pairings and settings are kept."
             echo
             echo "### Install"
             case "${{ matrix.slug }}" in
@@ -200,11 +206,19 @@ jobs:
           pattern: updater-*
           path: updater
           merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Write latest.json
         run: |
           v="${VERSION#v}"
           case "$v" in *.*.*) ;; *.*) v="$v.0" ;; *) v="$v.0.0" ;; esac
+          echo "SEMVER=$v" >> "$GITHUB_ENV"
           SEMVER="$v" node .github/scripts/update-feed.mjs updater latest.json
+      - name: Check that installed copies can download and verify every update
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: node .github/scripts/updater-key.mjs verify-feed latest.json apps/skerry-app/tauri.conf.json
       - name: Publish it on the updater branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,3 +4,5 @@
 /apps/skerry-app/gen
 # Signing certificate made by .github/scripts/make-macos-certificate.sh
 /skerry-signing-certificate
+# Update signing key made by .github/scripts/make-updater-key.sh
+/skerry-updater-key

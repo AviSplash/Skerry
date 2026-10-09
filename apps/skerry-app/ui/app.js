@@ -287,7 +287,10 @@ function renderDialog() {
 // ---------------------------------------------------------------------------
 
 async function checkForUpdates(manual) {
-  if (checkingUpdate) return;
+  if (checkingUpdate) {
+    if (manual) toast("Already checking for updates…", "ok");
+    return;
+  }
   checkingUpdate = true;
   try {
     const found = await api.invoke("check_update");
@@ -295,8 +298,12 @@ async function checkForUpdates(manual) {
       update = found;
       renderBanners();
       if (manual) toast(`Skerry ${found.version} is available.`, "ok");
-    } else if (manual) {
-      toast(`You have the latest version of Skerry (${state.me.version}).`, "ok");
+    } else {
+      if (update && updateProgress === null) {
+        update = null;
+        renderBanners();
+      }
+      if (manual) toast(`No updates: you have the latest version of Skerry (${state.me.version}).`, "ok");
     }
   } catch (e) {
     if (manual) toast(String(e), "error");
