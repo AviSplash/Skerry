@@ -741,6 +741,16 @@ impl Engine {
             && self.desktops.get(id).is_some_and(|d| !d.is_empty())
     }
 
+    /// A computer's name for log messages.
+    fn peer_name(&self, id: &str) -> String {
+        self.online
+            .get(id)
+            .and_then(|c| self.conns.get(c))
+            .map(|c| c.hello.name.clone())
+            .or_else(|| self.cfg.peer(id).map(|p| p.name.clone()))
+            .unwrap_or_else(|| id.to_string())
+    }
+
     fn peer_os(&self, id: &str) -> OsKind {
         self.online
             .get(id)
@@ -1225,6 +1235,9 @@ impl Engine {
         if self.controlled_by.as_deref().is_some_and(|c| c != pid) {
             let _ = self.emu.send(EmuCmd::ReleaseAll);
         }
+        if self.controlled_by.as_deref() != Some(pid) {
+            tracing::info!("{} is now controlling this computer", self.peer_name(pid));
+        }
         self.controlled_by = Some(pid.to_string());
         let _ = self.emu.send(EmuCmd::Motion(x, y));
         self.update_edges();
@@ -1237,6 +1250,7 @@ impl Engine {
         }
         let _ = self.emu.send(EmuCmd::ReleaseAll);
         self.controlled_by = None;
+        tracing::info!("{} stopped controlling this computer", self.peer_name(pid));
         self.update_edges();
         self.dirty = true;
         // Hand our clipboard to the controller if it changed while here.
@@ -1260,6 +1274,7 @@ impl Engine {
                     }
                     _ => {
                         // Not switching after all: put the cursor back where it was.
+                        tracing::debug!("not switching at the {} edge", edge.name());
                         let p = self.local_desktop.clamp(x, y);
                         self.capture.release(Some(self.local_desktop.inset(edge, p, 2.0)));
                     }
@@ -1291,6 +1306,7 @@ impl Engine {
     fn enter(&mut self, peer: String, via: Edge, frac: f64, came_from: String, home: (f64, f64)) {
         let Some(desk) = self.desktops.get(&peer) else { return };
         let (x, y) = desk.entry_point(via, frac);
+        tracing::info!("controlling {}", self.peer_name(&peer));
         self.send_to(&peer, Message::Enter { x, y });
         self.sync_clipboard_to(&peer);
         self.focus = Focus::Remote { peer, x, y, entered_via: via, came_from, home };
@@ -1341,6 +1357,7 @@ impl Engine {
 
     fn return_home_at(&mut self, p: (f64, f64)) {
         let Focus::Remote { peer, .. } = std::mem::replace(&mut self.focus, Focus::Local) else { return };
+        tracing::info!("back on this computer (from {})", self.peer_name(&peer));
         self.send_to(&peer, Message::Leave);
         self.capture.release(Some(p));
         self.dirty = true;

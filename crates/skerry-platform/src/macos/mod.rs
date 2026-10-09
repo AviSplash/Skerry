@@ -1,10 +1,19 @@
 //! macOS backend.
 //!
 //! Capture uses a Quartz event tap at the HID level. When the cursor pushes
-//! against an enabled edge, the cursor is frozen in place
-//! (`CGAssociateMouseAndMouseCursorPosition(false)`) and hidden, and the tap
-//! swallows every event and reports mouse deltas, buttons, scrolling and
-//! keys until released.
+//! against an enabled edge, the cursor is hidden and parked in the middle of
+//! the main display, and the tap reports mouse deltas, buttons, scrolling and
+//! keys until released: buttons, scrolling and keys are swallowed, and after
+//! every movement the cursor is warped back to its parking spot. This is the
+//! scheme Input Leap (Barrier, Synergy) has used for years. Skerry used to
+//! detach the mouse from the cursor instead
+//! (`CGAssociateMouseAndMouseCursorPosition(false)`), which macOS only honours
+//! for the frontmost app; re-attaching from a background app could leave the
+//! Mac's mouse and keyboard dead after control came back.
+//!
+//! Everything that changes the cursor runs on the tap's own thread, in order
+//! with the events it filters; the engine's grab and release requests are
+//! queued there through a run loop source.
 //!
 //! Emulation posts Quartz events. Modifier state is tracked and attached to
 //! every event, and click counts are computed so double-clicks work.
@@ -20,7 +29,10 @@ use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::mach_port::CFMachPortRef;
-use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+use core_foundation::runloop::{
+    kCFRunLoopCommonModes, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, CFRunLoopSourceCreate,
+    CFRunLoopSourceSignal, CFRunLoopWakeUp,
+};
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::display::CGDisplay;
 use core_graphics::event::{
@@ -37,7 +49,7 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 type Parts = (Box<dyn Capture>, Box<dyn Emulation>, Box<dyn ScreenSource>, String);
@@ -279,7 +291,8 @@ pub fn accessibility_trusted(prompt: bool) -> bool {
 
 /// Lets a background app hide the cursor (undocumented WindowServer
 /// property, the same one other KVM tools use). Looked up at runtime so a
-/// missing symbol only disables cursor hiding.
+/// missing symbol only disables cursor hiding. Set again before every hide
+/// and show, as Input Leap does.
 fn allow_background_cursor_hiding() {
     type DefaultConnection = unsafe extern "C" fn() -> i32;
     type SetProperty = unsafe extern "C" fn(i32, i32, CFStringRef, *const c_void) -> i32;
@@ -295,6 +308,33 @@ fn allow_background_cursor_hiding() {
         let key = CFString::new("SetsCursorInBackground");
         set(cid, cid, key.as_concrete_TypeRef(), CFBoolean::true_value().as_CFTypeRef());
     }
+}
+
+/// How long macOS ignores local mouse movement after the cursor is warped
+/// (a quarter of a second by default). Skerry warps the hidden cursor on
+/// every movement while controlling another computer and once more when
+/// control comes back, so keep this tiny (the values Input Leap uses). The
+/// setter is deprecated but still present; it's looked up at runtime so its
+/// removal could never stop Skerry from starting.
+fn set_warp_suppression(seconds: f64) {
+    type SetInterval = unsafe extern "C" fn(f64) -> i32;
+    static SETTER: OnceLock<Option<SetInterval>> = OnceLock::new();
+    let setter = SETTER.get_or_init(|| unsafe {
+        let f = libc::dlsym(libc::RTLD_DEFAULT, c"CGSetLocalEventsSuppressionInterval".as_ptr());
+        (!f.is_null()).then(|| std::mem::transmute::<*mut c_void, SetInterval>(f))
+    });
+    if let Some(set) = setter {
+        unsafe { set(seconds) };
+    }
+}
+
+fn warp_cursor(x: f64, y: f64) {
+    let _ = CGDisplay::warp_mouse_cursor_position(CGPoint::new(x, y));
+}
+
+fn main_display_center() -> (f64, f64) {
+    let b = CGDisplay::main().bounds();
+    ((b.origin.x + b.size.width / 2.0).round(), (b.origin.y + b.size.height / 2.0).round())
 }
 
 pub fn displays() -> Vec<Rect> {
@@ -330,12 +370,66 @@ struct Shared {
     block_drag: AtomicBool,
     grabbed: AtomicBool,
     cursor_hidden: AtomicBool,
+    /// Where the hidden cursor is kept while capturing.
+    park: Mutex<(f64, f64)>,
     buttons: AtomicU8,
     desktop: RwLock<Desktop>,
     hotkeys: Mutex<HotkeyMatcher>,
     local_keys: Mutex<HashSet<u32>>,
     tap_port: AtomicPtr<c_void>,
     status: Mutex<BackendStatus>,
+    /// Grab and release requests waiting for the tap thread.
+    commands: Mutex<Vec<Command>>,
+    /// Wakes the tap thread for `commands`, once its run loop is running.
+    waker: OnceLock<Waker>,
+}
+
+/// A grab or release requested by the engine, carried out on the tap thread.
+enum Command {
+    Grab,
+    Release(Option<(f64, f64)>),
+}
+
+struct Waker {
+    run_loop: CFRunLoop,
+    source: CFRunLoopSource,
+}
+
+// Signalling a run loop source and waking a run loop are thread-safe.
+unsafe impl Send for Waker {}
+unsafe impl Sync for Waker {}
+
+impl Shared {
+    /// Have the tap thread carry out `command`, or carry it out here while
+    /// the tap isn't running yet (nothing can race with it then).
+    fn request(&self, command: Command) {
+        match self.waker.get() {
+            Some(w) => {
+                self.commands.lock().unwrap().push(command);
+                unsafe {
+                    CFRunLoopSourceSignal(w.source.as_concrete_TypeRef());
+                    CFRunLoopWakeUp(w.run_loop.as_concrete_TypeRef());
+                }
+            }
+            None => run_command(self, command),
+        }
+    }
+}
+
+fn run_command(s: &Shared, command: Command) {
+    match command {
+        Command::Grab => start_grab(s),
+        Command::Release(warp) => stop_grab(s, warp),
+    }
+}
+
+/// Run loop source callback on the tap thread: `info` is the `Shared`.
+extern "C" fn perform_commands(info: *const c_void) {
+    let s = unsafe { &*(info as *const Shared) };
+    let commands = std::mem::take(&mut *s.commands.lock().unwrap());
+    for command in commands {
+        run_command(s, command);
+    }
 }
 
 pub struct MacCapture {
@@ -352,6 +446,7 @@ impl MacCapture {
             block_drag: AtomicBool::new(true),
             grabbed: AtomicBool::new(false),
             cursor_hidden: AtomicBool::new(false),
+            park: Mutex::new(main_display_center()),
             buttons: AtomicU8::new(0),
             desktop: RwLock::new(Desktop::new(displays())),
             hotkeys: Mutex::new(HotkeyMatcher::default()),
@@ -362,8 +457,12 @@ impl MacCapture {
             } else {
                 BackendStatus::NeedsPermission(permission_hint())
             }),
+            commands: Mutex::new(Vec::new()),
+            waker: OnceLock::new(),
         });
         allow_background_cursor_hiding();
+        // An earlier Skerry may have left the mouse detached from the cursor.
+        let _ = CGDisplay::associate_mouse_and_mouse_cursor_position(true);
         let s = shared.clone();
         std::thread::Builder::new()
             .name("skerry-mac-tap".into())
@@ -424,7 +523,39 @@ fn tap_thread(s: Arc<Shared>) {
                 return;
             }
         };
-        CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
+        let run_loop = CFRunLoop::get_current();
+        run_loop.add_source(&source, unsafe { kCFRunLoopCommonModes });
+
+        // Grab and release requests from the engine arrive through this
+        // source. `info` points at `s`, which this thread keeps alive.
+        let mut context = CFRunLoopSourceContext {
+            version: 0,
+            info: Arc::as_ptr(&s) as *mut c_void,
+            retain: None,
+            release: None,
+            copyDescription: None,
+            equal: None,
+            hash: None,
+            schedule: None,
+            cancel: None,
+            perform: perform_commands,
+        };
+        let commands = unsafe {
+            let raw = CFRunLoopSourceCreate(std::ptr::null(), 0, &mut context);
+            if raw.is_null() {
+                None
+            } else {
+                Some(CFRunLoopSource::wrap_under_create_rule(raw))
+            }
+        };
+        match commands {
+            Some(source) => {
+                run_loop.add_source(&source, unsafe { kCFRunLoopCommonModes });
+                let _ = s.waker.set(Waker { run_loop: run_loop.clone(), source });
+            }
+            None => tracing::warn!("couldn't create the capture command source; grabbing from the engine thread"),
+        }
+
         tap.enable();
         set_status(&s, BackendStatus::Ok);
         CFRunLoop::run_current();
@@ -452,6 +583,13 @@ fn other_button(n: i64) -> Button {
 
 fn on_event(s: &Shared, etype: CGEventType, event: &CGEvent) -> CallbackResult {
     if matches!(etype, CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput) {
+        if matches!(etype, CGEventType::TapDisabledByUserInput) && s.grabbed.load(Ordering::Acquire) {
+            // macOS switched the tap off (secure input, such as a password
+            // field): input reaches the Mac again, so give it the cursor back
+            // and tell the engine to stop controlling the other computer.
+            stop_grab(s, None);
+            let _ = s.tx.send(CaptureEvent::Hotkey(HotkeyAction::ReturnHome));
+        }
         let port = s.tap_port.load(Ordering::Acquire);
         if !port.is_null() {
             unsafe { CGEventTapEnable(port as CFMachPortRef, true) };
@@ -497,17 +635,20 @@ fn on_event(s: &Shared, etype: CGEventType, event: &CGEvent) -> CallbackResult {
         | CGEventType::LeftMouseDragged
         | CGEventType::RightMouseDragged
         | CGEventType::OtherMouseDragged => {
-            let dx = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X) as f64;
-            let dy = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y) as f64;
+            let dx = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_X);
+            let dy = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_Y);
             if grabbed {
                 if dx != 0.0 || dy != 0.0 {
                     let _ = s.tx.send(CaptureEvent::Motion { dx, dy });
                 }
-                return CallbackResult::Drop;
+                // Keep the hidden cursor parked. macOS ignores the warp unless
+                // the movement itself goes through (Input Leap's experience),
+                // so let it.
+                let (px, py) = *s.park.lock().unwrap();
+                warp_cursor(px, py);
+                return CallbackResult::Keep;
             }
-            if maybe_begin(s, event.location(), dx, dy) {
-                return CallbackResult::Drop;
-            }
+            maybe_begin(s, event.location(), dx, dy);
             CallbackResult::Keep
         }
         CGEventType::ScrollWheel => {
@@ -578,14 +719,16 @@ fn on_event(s: &Shared, etype: CGEventType, event: &CGEvent) -> CallbackResult {
     }
 }
 
-fn maybe_begin(s: &Shared, at: CGPoint, dx: f64, dy: f64) -> bool {
+/// Start capturing if the cursor is pushing against an edge that leads to
+/// another computer.
+fn maybe_begin(s: &Shared, at: CGPoint, dx: f64, dy: f64) {
     let edges = EdgeSet::from_bits(s.edges.load(Ordering::Acquire));
     if edges.is_empty() || (s.block_drag.load(Ordering::Relaxed) && any_button_down()) {
-        return false;
+        return;
     }
     let desk = s.desktop.read().unwrap();
     let (x, y) = desk.clamp(at.x, at.y);
-    let Some(edge) = desk.edge_near(x, y, 1.0) else { return false };
+    let Some(edge) = desk.edge_near(x, y, 1.0) else { return };
     let pushing = match edge {
         Edge::Left => dx < 0.0,
         Edge::Right => dx > 0.0,
@@ -593,31 +736,44 @@ fn maybe_begin(s: &Shared, at: CGPoint, dx: f64, dy: f64) -> bool {
         Edge::Bottom => dy > 0.0,
     };
     if !edges.contains(edge) || !pushing {
-        return false;
+        return;
     }
     drop(desk);
     start_grab(s);
     let _ = s.tx.send(CaptureEvent::Begin { edge, x, y });
-    true
 }
 
+/// Start capturing: hide the cursor and park it. Runs on the tap thread.
 fn start_grab(s: &Shared) {
-    s.grabbed.store(true, Ordering::Release);
-    let _ = CGDisplay::associate_mouse_and_mouse_cursor_position(false);
+    if s.grabbed.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    set_warp_suppression(0.0001);
+    let park = main_display_center();
+    *s.park.lock().unwrap() = park;
+    allow_background_cursor_hiding();
     if !s.cursor_hidden.swap(true, Ordering::AcqRel) {
         let _ = CGDisplay::main().hide_cursor();
     }
+    warp_cursor(park.0, park.1);
+    // Never detach the mouse from the cursor (see the module notes); saying
+    // so explicitly also undoes the brief detach a warp causes.
+    let _ = CGDisplay::associate_mouse_and_mouse_cursor_position(true);
 }
 
+/// Stop capturing: put the cursor at `warp` and show it. Runs on the tap
+/// thread.
 fn stop_grab(s: &Shared, warp: Option<(f64, f64)>) {
     s.grabbed.store(false, Ordering::Release);
+    set_warp_suppression(0.0);
     if let Some((x, y)) = warp {
-        let _ = CGDisplay::warp_mouse_cursor_position(CGPoint::new(x, y));
+        warp_cursor(x, y);
     }
-    let _ = CGDisplay::associate_mouse_and_mouse_cursor_position(true);
+    allow_background_cursor_hiding();
     if s.cursor_hidden.swap(false, Ordering::AcqRel) {
         let _ = CGDisplay::main().show_cursor();
     }
+    let _ = CGDisplay::associate_mouse_and_mouse_cursor_position(true);
 }
 
 impl Capture for MacCapture {
@@ -631,10 +787,10 @@ impl Capture for MacCapture {
         self.shared.block_drag.store(block, Ordering::Relaxed);
     }
     fn grab(&self) {
-        start_grab(&self.shared);
+        self.shared.request(Command::Grab);
     }
     fn release(&self, warp: Option<(f64, f64)>) {
-        stop_grab(&self.shared, warp);
+        self.shared.request(Command::Release(warp));
     }
     fn displays(&self) -> Vec<Rect> {
         let d = displays();
