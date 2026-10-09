@@ -66,9 +66,9 @@ Download the installer for each computer from its release:
 
 | OS | Release | File |
 |---|---|---|
-| Windows | [v1.1.8 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.8-windows) | `Skerry_1.1.8_x64-setup.exe` or `.msi` |
-| macOS | [v1.1.8 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.8-macos) | `Skerry_1.1.8_universal.dmg` (Apple Silicon and Intel) |
-| Linux | [v1.1.8 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.8-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
+| Windows | [v1.1.9 - Windows](https://github.com/AviSplash/Skerry/releases/tag/v1.1.9-windows) | `Skerry_1.1.9_x64-setup.exe` or `.msi` |
+| macOS | [v1.1.9 - macOS](https://github.com/AviSplash/Skerry/releases/tag/v1.1.9-macos) | `Skerry_1.1.9_universal.dmg` (Apple Silicon and Intel) |
+| Linux | [v1.1.9 - Linux](https://github.com/AviSplash/Skerry/releases/tag/v1.1.9-linux) | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), or `.AppImage` (any distro) |
 
 Install Skerry on **every** computer you want to share between. Use the same version everywhere.
 

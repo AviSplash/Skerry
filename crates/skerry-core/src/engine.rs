@@ -1113,8 +1113,27 @@ impl Engine {
         }
     }
 
+    /// Whether this computer's own mouse and keyboard may start controlling
+    /// another computer right now. While being controlled that needs a
+    /// capture backend that can tell them apart from replayed input.
+    fn may_take_over(&self) -> bool {
+        self.controlled_by.is_none() || self.capture.local_input_only()
+    }
+
+    /// The local mouse or keyboard was used while another computer was in
+    /// control: hand this computer back to its own input. The controller
+    /// returns to its own screen when it gets the `Leave`.
+    fn take_back(&mut self) {
+        let Some(pid) = self.controlled_by.take() else { return };
+        tracing::info!("this computer's own input took over from {}", self.peer_name(&pid));
+        let _ = self.emu.send(EmuCmd::ReleaseAll);
+        self.send_to(&pid, Message::Leave);
+        self.update_edges();
+        self.dirty = true;
+    }
+
     fn update_edges(&mut self) {
-        let edges: EdgeSet = if self.cfg.enabled && self.cfg.edge_switching && self.controlled_by.is_none() {
+        let edges: EdgeSet = if self.cfg.enabled && self.cfg.edge_switching && self.may_take_over() {
             Edge::ALL.into_iter().filter(|e| self.cfg.layout.get(*e).is_some_and(|id| self.peer_ready(id))).collect()
         } else {
             EdgeSet::empty()
@@ -1272,6 +1291,19 @@ impl Engine {
     }
 
     fn on_leave(&mut self, pid: &str) {
+        if let Focus::Remote { peer, home, .. } = &self.focus {
+            if peer == pid {
+                // The other computer's own mouse or keyboard took it back.
+                // It already stopped listening, so no `Leave` goes back:
+                // that would end its own control of us if it came here.
+                let home = *home;
+                tracing::info!("{} took back its own mouse and keyboard", self.peer_name(pid));
+                self.focus = Focus::Local;
+                self.capture.release(Some(home));
+                self.dirty = true;
+                return;
+            }
+        }
         if self.controlled_by.as_deref() != Some(pid) {
             return;
         }
@@ -1290,9 +1322,10 @@ impl Engine {
         match ev {
             CaptureEvent::Begin { edge, x, y } => {
                 let target = self.cfg.layout.get(edge).map(str::to_string).filter(|id| self.peer_ready(id));
-                let ok = self.cfg.enabled && self.controlled_by.is_none() && matches!(self.focus, Focus::Local);
+                let ok = self.cfg.enabled && self.may_take_over() && matches!(self.focus, Focus::Local);
                 match (ok, target) {
                     (true, Some(id)) => {
+                        self.take_back();
                         let frac = self.local_desktop.fraction(edge, x, y);
                         let p = self.local_desktop.clamp(x, y);
                         let home = self.local_desktop.inset(edge, p, 2.0);
@@ -1399,14 +1432,19 @@ impl Engine {
     fn on_hotkey(&mut self, action: HotkeyAction) {
         match (action, self.focus.clone()) {
             (HotkeyAction::ReturnHome, Focus::Remote { home, .. }) => self.return_home_at(home),
-            (HotkeyAction::ReturnHome, Focus::Local) => {}
+            (HotkeyAction::ReturnHome, Focus::Local) => {
+                if self.capture.local_input_only() {
+                    self.take_back();
+                }
+            }
             (HotkeyAction::Switch(edge), Focus::Local) => {
-                if !self.cfg.enabled || self.controlled_by.is_some() {
+                if !self.cfg.enabled || !self.may_take_over() {
                     return;
                 }
                 let Some(t) = self.cfg.layout.get(edge).map(str::to_string).filter(|id| self.peer_ready(id)) else {
                     return;
                 };
+                self.take_back();
                 self.capture.grab();
                 let home = self.local_desktop.center();
                 let me = self.my_id.clone();

@@ -824,6 +824,10 @@ impl Capture for MacCapture {
     fn status(&self) -> BackendStatus {
         self.shared.status.lock().unwrap().clone()
     }
+    fn local_input_only(&self) -> bool {
+        // Replayed events carry MAGIC and are skipped by the tap.
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------

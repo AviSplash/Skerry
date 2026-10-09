@@ -191,6 +191,10 @@ impl Capture for WinCapture {
         *self.shared.desktop.write().unwrap() = Desktop::new(m.clone());
         m
     }
+    fn local_input_only(&self) -> bool {
+        // The hooks skip injected events (SendInput) unless capturing.
+        true
+    }
 }
 
 fn hook_thread(ready: std::sync::mpsc::Sender<Result<()>>) {

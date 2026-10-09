@@ -85,6 +85,13 @@ pub trait Capture: Send + Sync {
     fn status(&self) -> BackendStatus {
         BackendStatus::Ok
     }
+    /// True if edge crossings and hotkeys come only from this computer's own
+    /// mouse and keyboard, never from input Skerry replays for another
+    /// computer. Then the local mouse and keyboard can take over while
+    /// another computer is in control.
+    fn local_input_only(&self) -> bool {
+        false
+    }
 }
 
 /// Replays input received from another computer.
