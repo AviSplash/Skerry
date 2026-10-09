@@ -18,6 +18,8 @@ struct CapState {
     edges: EdgeSet,
     released: Vec<Option<(f64, f64)>>,
     grabs: usize,
+    /// Report only the physical mouse and keyboard, like macOS and Windows.
+    local_only: bool,
 }
 
 struct MockCapture(Arc<Mutex<CapState>>);
@@ -35,6 +37,9 @@ impl Capture for MockCapture {
     }
     fn displays(&self) -> Vec<Rect> {
         vec![Rect::new(0, 0, 1920, 1080)]
+    }
+    fn local_input_only(&self) -> bool {
+        self.0.lock().unwrap().local_only
     }
 }
 
@@ -230,6 +235,59 @@ async fn pair_control_type_copy_and_return() {
     b.h.shutdown().await;
     wait_for("released after peer left", || a.cap.lock().unwrap().released.len() > released_before).await;
     assert_eq!(a.h.snapshot().focus, FocusView::Local);
+}
+
+#[tokio::test]
+async fn controlled_computer_takes_over_with_its_own_mouse() {
+    let win = Node::new(OsKind::Windows).await;
+    let mac = Node::new(OsKind::Macos).await;
+    win.cap.lock().unwrap().local_only = true;
+    mac.cap.lock().unwrap().local_only = true;
+    assert!(pair(&win, &mac, false).await.0);
+    wait_for("both online", || online(&win, &mac) && online(&mac, &win)).await;
+
+    // Windows | Mac
+    win.h.set_layout(Edge::Right, Some(mac.id.clone()));
+    wait_for("edges", || {
+        win.cap.lock().unwrap().edges.contains(Edge::Right) && mac.cap.lock().unwrap().edges.contains(Edge::Left)
+    })
+    .await;
+
+    // Windows controls the Mac; the Mac keeps its edge toward Windows.
+    win.send(CaptureEvent::Begin { edge: Edge::Right, x: 1919.0, y: 300.0 });
+    wait_for("mac controlled", || mac.h.snapshot().focus == FocusView::ControlledBy(win.id.clone())).await;
+    wait_for("mac edge still armed", || mac.cap.lock().unwrap().edges.contains(Edge::Left)).await;
+    win.send(CaptureEvent::Button { button: Button::Left, pressed: true });
+    wait_for("button on mac", || mac.emu_has(&Emu::Button(Button::Left, true))).await;
+
+    // The Mac's own mouse pushes through its left edge: it now controls Windows.
+    let released = win.cap.lock().unwrap().released.len();
+    mac.send(CaptureEvent::Begin { edge: Edge::Left, x: 0.0, y: 600.0 });
+    wait_for("roles swapped", || {
+        mac.h.snapshot().focus == FocusView::Controlling(win.id.clone())
+            && win.h.snapshot().focus == FocusView::ControlledBy(mac.id.clone())
+    })
+    .await;
+    wait_for("windows let go of its cursor", || win.cap.lock().unwrap().released.len() > released).await;
+    wait_for("entered windows on its right edge", || win.emu_has(&Emu::Motion(1919.0, 600.0))).await;
+    // Input Windows was replaying on the Mac is let go (no stuck button).
+    wait_for("held button released", || mac.emu_has(&Emu::Button(Button::Left, false))).await;
+    // The Mac stays in control: nothing bounced it back home.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(mac.h.snapshot().focus, FocusView::Controlling(win.id.clone()));
+
+    // And back the other way, this time with Windows' own mouse.
+    win.send(CaptureEvent::Begin { edge: Edge::Right, x: 1919.0, y: 100.0 });
+    wait_for("windows in control again", || {
+        win.h.snapshot().focus == FocusView::Controlling(mac.id.clone())
+            && mac.h.snapshot().focus == FocusView::ControlledBy(win.id.clone())
+    })
+    .await;
+
+    // The return-home hotkey on the controlled Mac just takes the Mac back.
+    mac.send(CaptureEvent::Hotkey(HotkeyAction::ReturnHome));
+    wait_for("both local", || win.h.snapshot().focus == FocusView::Local && mac.h.snapshot().focus == FocusView::Local)
+        .await;
 }
 
 #[tokio::test]
