@@ -1,0 +1,47 @@
+{
+  "version": "1.1.9",
+  "notes": "Skerry v1.1.9. Release notes: https://github.com/AviSplash/Skerry/releases",
+  "pub_date": "2026-10-09T21:54:01Z",
+  "platforms": {
+    "linux-x86_64-appimage": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT2dKbmpKV1g1dktZZ0QwQVN6YVY5Zm9CQkZNUElZV2dibXhZenkvQVlRcGkveHRaR0hEZ3pFcGY1bFYzcUl1SDdBb21WeFkwUHlFVjkwSVg1OHVwREE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyNzUwCWZpbGU6U2tlcnJ5XzEuMS45X2FtZDY0LkFwcEltYWdlCXZlcnNpb246MS4xLjkKK2pWMFphYzFQKzZMVXE2UFVQUUZrS0F6ejRvcUdjQVNhT1gvUmhjY1A2a014c1Z6elRWanR1U091NCswQmZtdmtmZlE2cDJZYklMOTJ1MDZDWWM0Qnc9PQo=",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-linux/Skerry_1.1.9_amd64.AppImage"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3NiU0JHQWJzOXlCb3MwcHh0L014aGhVa1hGK2JDaXQxelJLQ2c2WEdidk9HWWdVK1JBL1hCLzhVWk0wNEVta25GeHdTOWFzNVpzZmJNNWdoaUZRL2dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyNzUwCWZpbGU6U2tlcnJ5XzEuMS45X2FtZDY0LmRlYgl2ZXJzaW9uOjEuMS45ClU0K1FwMVRXdkNYNmwzZjdQcGtZbnZ0SXFrdjJ1RHVnRm5vUFdyUkJ5bE50dE5NVFlLMytJY21iUGpuYzVLVmE5ejEvRVVMd3ovbDM1UHhQTzdQQURRPT0K",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-linux/Skerry_1.1.9_amd64.deb"
+    },
+    "linux-x86_64-rpm": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3JaRVZLZFhvZUwwMEsyWGRJSG1abUM4NStSU3FPeHE0N00ycksxMENwV3NRRjNDYzVnTzF0MXY0elNBUS9Tc2I2VWE0cmxmZjlRZWYzQUpnK3I5Z2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyNzUwCWZpbGU6U2tlcnJ5LTEuMS45LTEueDg2XzY0LnJwbQl2ZXJzaW9uOjEuMS45CllpTTR0dThSVUQrQTIwYUtkSjQxbFVUdzM2RklIVlQ5SEpqS2U2Sy8reENvOHN3MUZaR3g4Y2tybTZGb2MrY21qRUNsbTkyTUVCK3QvZ2Z2dnR0S0NnPT0K",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-linux/Skerry-1.1.9-1.x86_64.rpm"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3NoYVNqaThjZ1dxcm1hMUJNb0JSK2dYTzlIUjNXVnRmb1o5UENJRHg0VGdldEVLNFFQNnV6WlhoYldZRUw4QWcvZlppMm5Tc3E1R2haL1huZDlQVXdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE4CWZpbGU6U2tlcnJ5LmFwcC50YXIuZ3oJdmVyc2lvbjoxLjEuOQpqL3FLS29uOEFvWUZjaGxlWGw5QTlYMm9wM3Y3cDZGY3NQS2QwRlU1MnVtdS83NkhOc1l3OUxVK2tFamlHdVRJM1dKQy9teUFjYVZTS3JBUmo2UjFCQT09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-macos/Skerry_1.1.9_universal.app.tar.gz"
+    },
+    "darwin-x86_64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3NoYVNqaThjZ1dxcm1hMUJNb0JSK2dYTzlIUjNXVnRmb1o5UENJRHg0VGdldEVLNFFQNnV6WlhoYldZRUw4QWcvZlppMm5Tc3E1R2haL1huZDlQVXdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE4CWZpbGU6U2tlcnJ5LmFwcC50YXIuZ3oJdmVyc2lvbjoxLjEuOQpqL3FLS29uOEFvWUZjaGxlWGw5QTlYMm9wM3Y3cDZGY3NQS2QwRlU1MnVtdS83NkhOc1l3OUxVK2tFamlHdVRJM1dKQy9teUFjYVZTS3JBUmo2UjFCQT09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-macos/Skerry_1.1.9_universal.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3NoYVNqaThjZ1dxcm1hMUJNb0JSK2dYTzlIUjNXVnRmb1o5UENJRHg0VGdldEVLNFFQNnV6WlhoYldZRUw4QWcvZlppMm5Tc3E1R2haL1huZDlQVXdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE4CWZpbGU6U2tlcnJ5LmFwcC50YXIuZ3oJdmVyc2lvbjoxLjEuOQpqL3FLS29uOEFvWUZjaGxlWGw5QTlYMm9wM3Y3cDZGY3NQS2QwRlU1MnVtdS83NkhOc1l3OUxVK2tFamlHdVRJM1dKQy9teUFjYVZTS3JBUmo2UjFCQT09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-macos/Skerry_1.1.9_universal.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3NoYVNqaThjZ1dxcm1hMUJNb0JSK2dYTzlIUjNXVnRmb1o5UENJRHg0VGdldEVLNFFQNnV6WlhoYldZRUw4QWcvZlppMm5Tc3E1R2haL1huZDlQVXdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE4CWZpbGU6U2tlcnJ5LmFwcC50YXIuZ3oJdmVyc2lvbjoxLjEuOQpqL3FLS29uOEFvWUZjaGxlWGw5QTlYMm9wM3Y3cDZGY3NQS2QwRlU1MnVtdS83NkhOc1l3OUxVK2tFamlHdVRJM1dKQy9teUFjYVZTS3JBUmo2UjFCQT09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-macos/Skerry_1.1.9_universal.app.tar.gz"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3VHZzhEbi9wRUhMeXZCSENFRHNDc1dKMjNiSDNEakMxRFVSdG9PandsNWU1VnBIUlU4ck1VZnJOVDNWQjczTjhLaHVCL2ltUUVZTjFyaVRxYlVGc3dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE3CWZpbGU6U2tlcnJ5XzEuMS45X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjEuOQpacXFKNjk2WWhBOEkxTXlSdkgzV3lNMzg3bWNUa1EvU0FteXRabWFFYWsxTlVjdEtsQXFFb1dPSkcrTWE5TDJhMXErajlFTnpyMDBiS2x4WENvM3ZEZz09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-windows/Skerry_1.1.9_x64-setup.exe"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT3VHZzhEbi9wRUhMeXZCSENFRHNDc1dKMjNiSDNEakMxRFVSdG9PandsNWU1VnBIUlU4ck1VZnJOVDNWQjczTjhLaHVCL2ltUUVZTjFyaVRxYlVGc3dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE3CWZpbGU6U2tlcnJ5XzEuMS45X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjEuOQpacXFKNjk2WWhBOEkxTXlSdkgzV3lNMzg3bWNUa1EvU0FteXRabWFFYWsxTlVjdEtsQXFFb1dPSkcrTWE5TDJhMXErajlFTnpyMDBiS2x4WENvM3ZEZz09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-windows/Skerry_1.1.9_x64-setup.exe"
+    },
+    "windows-x86_64-msi": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWGFuc2NqdCtiT2g0OE9hc0pEQVYxRTFienpaL3oraWNrZ05kYm1MeDRick1Oa1k4MHZZcHE1b21xS0xwN3gwdExid29GQTBFeDhUR2lHRjc0enkybiszUlpualp2Q3c0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTgyODE3CWZpbGU6U2tlcnJ5XzEuMS45X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoxLjEuOQpUdFFocUk0azFxQ2hjV0QwOW5HR0ZrYS9FcnR2REtESkl1c1lxaUV0dW9KenhoeHZzVmpyYVVYa3daWDdjZ1FGSkpnd3pSM0RnTnFYb05oVWJ3aVRBZz09Cg==",
+      "url": "https://github.com/AviSplash/Skerry/releases/download/v1.1.9-windows/Skerry_1.1.9_x64_en-US.msi"
+    }
+  }
+}
